@@ -1,19 +1,63 @@
-import os
-from dotenv import load_dotenv
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
-load_dotenv()
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings:
-    APP_NAME: str = os.getenv("APP_NAME", "Platform Launchpad API")
-    APP_VERSION: str = os.getenv("APP_VERSION", "1.0.0")
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://platform_user:platform_pass@localhost:5432/platform_launchpad"
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseSettings):
+    """Typed application configuration loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "change_this_to_a_long_random_secret")
-    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+    app_name: str = "Platform Launchpad API"
+    app_version: str = "1.0.0"
+    app_environment: Literal[
+        "development",
+        "testing",
+        "staging",
+        "production",
+    ] = "development"
+
+    api_v1_prefix: str = "/api/v1"
+    debug: bool = False
+
+    database_url: str
+
+    secret_key: SecretStr
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60
+
+    cors_origins: list[str] = ["http://localhost:3000"]
+
+    @field_validator("api_v1_prefix")
+    @classmethod
+    def validate_api_prefix(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("API_V1_PREFIX must begin with '/'")
+
+        normalized_value = value.rstrip("/")
+
+        if not normalized_value:
+            raise ValueError("API_V1_PREFIX cannot be empty")
+
+        return normalized_value
 
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    """Return one cached settings instance per application process."""
+
+    return Settings()
+
+
+settings = get_settings()

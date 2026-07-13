@@ -1,17 +1,38 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.router import api_router
+from app.api.routes.health import router as health_router
 from app.core.config import settings
 
-app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION
-)
+
+def create_application() -> FastAPI:
+    """Create and configure the Platform Launchpad FastAPI application."""
+
+    application = FastAPI(
+        title=settings.app_name,
+        version=settings.app_version,
+        debug=settings.debug,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+    )
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    )
+
+    application.include_router(health_router)
+    application.include_router(
+        api_router,
+        prefix=settings.api_v1_prefix,
+    )
+
+    return application
 
 
-@app.get("/")
-def root():
-    return {"message": f"{settings.APP_NAME} is running"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+app = create_application()
