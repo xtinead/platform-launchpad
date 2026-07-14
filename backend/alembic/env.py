@@ -6,11 +6,18 @@ from sqlalchemy import engine_from_config, pool
 from app.core.config import settings
 from app.db.base import Base
 
+from app.core.config import settings
+from app.db.base import Base
+
+import app.models  # noqa: F401
+
 # Import ORM models here so their tables are registered in Base.metadata.
 # These imports will be added as the model files are implemented.
 #
 # Example:
 # from app.models.user import User  # noqa: F401
+
+
 
 
 config = context.config
