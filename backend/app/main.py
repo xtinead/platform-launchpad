@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.api.routes.health import router as health_router
 from app.core.config import settings
-
+from app.api.errors import application_error_handler
+from app.core.exceptions import ApplicationError
 
 def create_application() -> FastAPI:
     """Create and configure the Platform Launchpad FastAPI application."""
@@ -16,6 +17,11 @@ def create_application() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
+    )
+
+    application.add_exception_handler(
+        ApplicationError,
+        application_error_handler,
     )
 
     application.add_middleware(
