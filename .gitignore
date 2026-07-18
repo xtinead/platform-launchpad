@@ -3,3 +3,8 @@ __pycache__/
 .env
 node_modules/
 .next/
+
+# Python test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

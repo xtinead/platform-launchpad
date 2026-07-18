@@ -8,12 +8,12 @@ async def application_error_handler(
     request: Request,
     exc: ApplicationError,
 ) -> JSONResponse:
-    """Convert expected application exceptions to the API error envelope."""
+    """Convert an application exception into the API error envelope."""
 
     request_id = getattr(
         request.state,
         "request_id",
-        "not-yet-implemented",
+        "unavailable",
     )
 
     return JSONResponse(
@@ -25,5 +25,8 @@ async def application_error_handler(
                 "details": exc.details,
                 "request_id": request_id,
             }
+        },
+        headers={
+            "X-Request-ID": request_id,
         },
     )
