@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import EnvironmentStatus, EnvironmentType
 from app.schemas.common import APIModel, PaginatedResponse
@@ -34,6 +34,60 @@ class EnvironmentCreateRequest(APIModel):
 
         return normalized_value
 
+class EnvironmentUpdateRequest(APIModel):
+    """Fields that an environment owner may update."""
+
+    application_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=1000,
+    )
+
+    @field_validator("application_version")
+    @classmethod
+    def normalize_application_version(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = value.strip()
+
+        if not normalized_value:
+            raise ValueError(
+                "Application version must not be empty."
+            )
+
+        return normalized_value
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = value.strip()
+
+        return normalized_value or None
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(
+        self,
+    ) -> "EnvironmentUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError(
+                "At least one environment field must be provided."
+            )
+
+        return self
 
 class EnvironmentResponse(APIModel):
     id: uuid.UUID
