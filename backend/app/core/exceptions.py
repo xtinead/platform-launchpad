@@ -90,3 +90,34 @@ class InvalidEnvironmentOperationError(ApplicationError):
     status_code = 409
     code = "invalid_environment_operation"
     message = "This operation is not valid for the environment's current state."
+
+class DeploymentRequestNotFoundError(ApplicationError):
+    status_code = 404
+    code = "deployment_request_not_found"
+    message = "The requested deployment request was not found."
+
+
+class ActiveDeploymentRequestExistsError(ApplicationError):
+    status_code = 409
+    code = "active_deployment_request_exists"
+    message = (
+        "This environment already has a queued or processing "
+        "deployment request."
+    )
+
+
+class InvalidDeploymentOperationError(ApplicationError):
+    status_code = 409
+    code = "invalid_deployment_operation"
+    message = (
+        "The requested operation is not valid for the "
+        "environment's current state."
+    )
+
+
+class DeploymentRequestAccessDeniedError(ApplicationError):
+    status_code = 403
+    code = "deployment_request_access_denied"
+    message = (
+        "You do not have permission to access this deployment request."
+    )

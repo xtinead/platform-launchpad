@@ -7,11 +7,18 @@ from sqlalchemy.orm import Session
 from app.api.deps import CurrentUser
 from app.db.deps import get_db
 from app.models.enums import EnvironmentStatus
+from app.schemas.deployment_request import (
+    DeploymentRequestCreateRequest,
+)
 from app.schemas.environment import (
     EnvironmentCreateRequest,
     EnvironmentListResponse,
+    EnvironmentOperationResponse,
     EnvironmentResponse,
     EnvironmentUpdateRequest,
+)
+from app.services.deployment_request_service import (
+    DeploymentRequestService,
 )
 from app.services.environment_service import EnvironmentService
 
@@ -133,6 +140,33 @@ def update_environment(
     """Update an accessible environment."""
 
     return EnvironmentService(session).update_environment(
+        current_user=current_user,
+        environment_id=environment_id,
+        request=request,
+    )
+
+
+@router.post(
+    "/{environment_id}/deployment-requests",
+    response_model=EnvironmentOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Queue an environment deployment request",
+    description=(
+        "Queue an asynchronous lifecycle operation for an environment. "
+        "The operation is validated against the environment's current "
+        "state, and only one queued or processing request may exist for "
+        "an environment at a time."
+    ),
+)
+def create_deployment_request(
+    environment_id: uuid.UUID,
+    request: DeploymentRequestCreateRequest,
+    current_user: CurrentUser,
+    session: Annotated[Session, Depends(get_db)],
+) -> EnvironmentOperationResponse:
+    """Queue an asynchronous operation for an environment."""
+
+    return DeploymentRequestService(session).create_request(
         current_user=current_user,
         environment_id=environment_id,
         request=request,

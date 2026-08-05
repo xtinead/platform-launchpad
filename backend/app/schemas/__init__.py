@@ -29,6 +29,11 @@ from app.schemas.user import (
     UserResponse,
     UserSummary,
 )
+from app.schemas.deployment_request import (
+    DeploymentRequestCreateRequest,
+    DeploymentRequestListResponse,
+    DeploymentRequestResponse,
+)
 
 __all__ = [
     "AdminUserUpdateRequest",
@@ -36,6 +41,7 @@ __all__ = [
     "AuditLogResponse",
     "DeploymentRequestListResponse",
     "DeploymentRequestResponse",
+    "DeploymentRequestCreateRequest",
     "EnvironmentCreateRequest",
     "EnvironmentListResponse",
     "EnvironmentOperationResponse",

@@ -2,11 +2,20 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import Field
+
 from app.models.enums import (
     DeploymentOperation,
     DeploymentRequestStatus,
 )
 from app.schemas.common import APIModel, PaginatedResponse
+
+
+class DeploymentRequestCreateRequest(APIModel):
+    """Request body for queuing an environment lifecycle operation."""
+
+    operation: DeploymentOperation
+    request_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class DeploymentRequestResponse(APIModel):
