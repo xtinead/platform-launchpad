@@ -1,5 +1,5 @@
 import uuid
-# from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -41,7 +41,7 @@ class DeploymentRequestRepository:
         *,
         environment_id: uuid.UUID,
     ) -> DeploymentRequest | None:
-        """Return the current queued or processing request for an environment."""
+        """Return the latest queued or processing request for an environment."""
 
         statement = (
             select(DeploymentRequest)
@@ -169,7 +169,7 @@ class DeploymentRequestRepository:
         *,
         limit: int = 20,
     ) -> list[DeploymentRequest]:
-        """Return the oldest queued deployment requests for worker polling."""
+        """Return the oldest queued deployment requests for polling."""
 
         statement = (
             select(DeploymentRequest)
@@ -190,6 +190,79 @@ class DeploymentRequestRepository:
         """Add and flush a deployment request."""
 
         self.session.add(deployment_request)
+        self.session.flush()
+        self.session.refresh(deployment_request)
+
+        return deployment_request
+
+    def claim_next_queued(
+        self,
+    ) -> DeploymentRequest | None:
+        """
+        Lock and claim the oldest queued deployment request.
+
+        PostgreSQL SKIP LOCKED allows multiple workers to poll
+        concurrently without claiming the same request.
+        """
+
+        statement = (
+            select(DeploymentRequest)
+            .where(
+                DeploymentRequest.status
+                == DeploymentRequestStatus.QUEUED,
+            )
+            .order_by(DeploymentRequest.requested_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+
+        deployment_request = self.session.scalar(statement)
+
+        if deployment_request is None:
+            return None
+
+        deployment_request.status = (
+            DeploymentRequestStatus.PROCESSING
+        )
+        deployment_request.attempt_count += 1
+        deployment_request.started_at = datetime.now(UTC)
+        deployment_request.completed_at = None
+        deployment_request.error_message = None
+
+        self.session.flush()
+        self.session.refresh(deployment_request)
+
+        return deployment_request
+
+    def mark_succeeded(
+        self,
+        deployment_request: DeploymentRequest,
+    ) -> DeploymentRequest:
+        """Mark a processing deployment request as successful."""
+
+        deployment_request.status = (
+            DeploymentRequestStatus.SUCCEEDED
+        )
+        deployment_request.completed_at = datetime.now(UTC)
+        deployment_request.error_message = None
+
+        self.session.flush()
+        self.session.refresh(deployment_request)
+
+        return deployment_request
+
+    def mark_failed(
+        self,
+        deployment_request: DeploymentRequest,
+        *,
+        error_message: str,
+    ) -> DeploymentRequest:
+        """Mark a processing deployment request as failed."""
+
+        deployment_request.status = DeploymentRequestStatus.FAILED
+        deployment_request.completed_at = datetime.now(UTC)
+        deployment_request.error_message = error_message
+
         self.session.flush()
         self.session.refresh(deployment_request)
 
