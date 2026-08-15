@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Generator
 
 import pytest
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.deps import get_db
 from app.main import app
+from app.models.user import User
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +57,7 @@ def db_session(
         autoflush=False,
         autocommit=False,
         expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
     )
 
     session = testing_session_factory()
@@ -63,7 +66,10 @@ def db_session(
         yield session
     finally:
         session.close()
-        transaction.rollback()
+
+        if transaction.is_active:
+            transaction.rollback()
+
         connection.close()
 
 
@@ -111,6 +117,21 @@ def registered_user(
 
     return response.json()
 
+@pytest.fixture
+def test_user(
+    db_session: Session,
+    registered_user: dict[str, object],
+) -> User:
+    """Return the registered user as a SQLAlchemy model instance."""
+
+    user = db_session.get(
+        User,
+        uuid.UUID(str(registered_user["id"])),
+    )
+
+    assert user is not None
+
+    return user
 
 @pytest.fixture
 def access_token(

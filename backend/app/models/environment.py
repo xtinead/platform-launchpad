@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import UniqueConstraint
 
 from app.db.base import Base
 from app.models.enums import EnvironmentStatus, EnvironmentType
@@ -42,6 +43,11 @@ class Environment(TimestampMixin, Base):
             "ix_environments_owner_id_name",
             "owner_id",
             "name",
+        ),
+        UniqueConstraint(
+            "owner_id",
+            "name",
+            name="uq_environments_owner_id_name",
         ),
     )
 

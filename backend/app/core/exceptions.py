@@ -59,3 +59,65 @@ class PermissionDeniedError(ApplicationError):
     status_code = 403
     code = "permission_denied"
     message = "You do not have permission to perform this operation."
+
+class EnvironmentNotFoundError(ApplicationError):
+    """Raised when an environment cannot be found."""
+
+    status_code = 404
+    code = "environment_not_found"
+    message = "The requested environment was not found."
+
+
+class EnvironmentNameAlreadyExistsError(ApplicationError):
+    """Raised when an owner already uses an environment name."""
+
+    status_code = 409
+    code = "environment_name_already_exists"
+    message = "An environment with this name already exists."
+
+
+class EnvironmentAccessDeniedError(ApplicationError):
+    """Raised when a user cannot access an environment."""
+
+    status_code = 403
+    code = "environment_access_denied"
+    message = "You do not have permission to access this environment."
+
+
+class InvalidEnvironmentOperationError(ApplicationError):
+    """Raised when an environment operation is not currently permitted."""
+
+    status_code = 409
+    code = "invalid_environment_operation"
+    message = "This operation is not valid for the environment's current state."
+
+class DeploymentRequestNotFoundError(ApplicationError):
+    status_code = 404
+    code = "deployment_request_not_found"
+    message = "The requested deployment request was not found."
+
+
+class ActiveDeploymentRequestExistsError(ApplicationError):
+    status_code = 409
+    code = "active_deployment_request_exists"
+    message = (
+        "This environment already has a queued or processing "
+        "deployment request."
+    )
+
+
+class InvalidDeploymentOperationError(ApplicationError):
+    status_code = 409
+    code = "invalid_deployment_operation"
+    message = (
+        "The requested operation is not valid for the "
+        "environment's current state."
+    )
+
+
+class DeploymentRequestAccessDeniedError(ApplicationError):
+    status_code = 403
+    code = "deployment_request_access_denied"
+    message = (
+        "You do not have permission to access this deployment request."
+    )
