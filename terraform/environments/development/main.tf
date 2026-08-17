@@ -171,3 +171,31 @@ module "eks" {
     module.vpc_endpoints,
   ]
 }
+
+module "load_balancer_controller_iam" {
+  source = "../../modules/load-balancer-controller-iam"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  cluster_name = module.eks.cluster_name
+
+  namespace            = "kube-system"
+  service_account_name = "aws-load-balancer-controller"
+
+  iam_policy_document = file(
+    "${path.module}/../../policies/aws-load-balancer-controller.json"
+  )
+
+  depends_on = [
+    module.eks,
+    module.vpc_endpoints,
+  ]
+}
+
+module "controller_ecr" {
+  source = "../../modules/controller-ecr"
+
+  project_name = var.project_name
+  environment  = var.environment
+}

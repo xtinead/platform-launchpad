@@ -183,3 +183,61 @@ resource "aws_vpc_endpoint" "s3" {
     }
   )
 }
+
+# -------------------------------------------------------------------
+# Amazon EKS Auth API
+# -------------------------------------------------------------------
+
+resource "aws_vpc_endpoint" "eks_auth" {
+  vpc_id = var.vpc_id
+
+  service_name = (
+    "com.amazonaws.${var.aws_region}.eks-auth"
+  )
+
+  vpc_endpoint_type = "Interface"
+
+  subnet_ids = var.private_subnet_ids
+
+  security_group_ids = [
+    aws_security_group.endpoints.id,
+  ]
+
+  private_dns_enabled = true
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-eks-auth-endpoint"
+    }
+  )
+}
+
+# -------------------------------------------------------------------
+# Elastic Load Balancing API
+# -------------------------------------------------------------------
+
+resource "aws_vpc_endpoint" "elasticloadbalancing" {
+  vpc_id = var.vpc_id
+
+  service_name = (
+    "com.amazonaws.${var.aws_region}.elasticloadbalancing"
+  )
+
+  vpc_endpoint_type = "Interface"
+
+  subnet_ids = var.private_subnet_ids
+
+  security_group_ids = [
+    aws_security_group.endpoints.id,
+  ]
+
+  private_dns_enabled = true
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-elasticloadbalancing-endpoint"
+    }
+  )
+}

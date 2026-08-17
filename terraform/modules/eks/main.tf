@@ -209,3 +209,27 @@ resource "aws_eks_addon" "coredns" {
     aws_eks_addon.vpc_cni,
   ]
 }
+
+# -------------------------------------------------------------------
+# EKS Pod Identity Agent Managed Add-on
+# -------------------------------------------------------------------
+
+resource "aws_eks_addon" "pod_identity_agent" {
+  cluster_name = aws_eks_cluster.this.name
+  addon_name   = "eks-pod-identity-agent"
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-pod-identity-agent"
+      Tier = "platform"
+    }
+  )
+
+  depends_on = [
+    aws_eks_node_group.primary,
+  ]
+}

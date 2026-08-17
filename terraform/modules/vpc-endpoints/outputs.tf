@@ -27,3 +27,13 @@ output "eks_endpoint_id" {
   description = "Amazon EKS API VPC endpoint ID."
   value       = aws_vpc_endpoint.eks.id
 }
+
+output "eks_auth_endpoint_id" {
+  description = "Amazon EKS Auth API VPC endpoint ID."
+  value       = aws_vpc_endpoint.eks_auth.id
+}
+
+output "elasticloadbalancing_endpoint_id" {
+  description = "Elastic Load Balancing API VPC endpoint ID."
+  value       = aws_vpc_endpoint.elasticloadbalancing.id
+}

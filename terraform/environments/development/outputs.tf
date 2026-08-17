@@ -192,3 +192,42 @@ output "eks_node_group_status" {
   description = "Development EKS managed node group status."
   value       = module.eks.node_group_status
 }
+
+output "eks_auth_endpoint_id" {
+  description = "Development Amazon EKS Auth API endpoint."
+  value       = module.vpc_endpoints.eks_auth_endpoint_id
+}
+
+output "elasticloadbalancing_endpoint_id" {
+  description = "Development Elastic Load Balancing API endpoint."
+  value = (
+    module.vpc_endpoints.elasticloadbalancing_endpoint_id
+  )
+}
+
+output "load_balancer_controller_repository_name" {
+  description = "AWS Load Balancer Controller ECR repository name."
+  value       = module.controller_ecr.repository_name
+}
+
+output "load_balancer_controller_repository_url" {
+  description = "AWS Load Balancer Controller ECR repository URL."
+  value       = module.controller_ecr.repository_url
+}
+
+output "load_balancer_controller_role_arn" {
+  description = "AWS Load Balancer Controller Pod Identity role ARN."
+  value       = module.load_balancer_controller_iam.role_arn
+}
+
+output "load_balancer_controller_policy_arn" {
+  description = "AWS Load Balancer Controller IAM policy ARN."
+  value       = module.load_balancer_controller_iam.policy_arn
+}
+
+output "load_balancer_controller_pod_identity_association_id" {
+  description = "AWS Load Balancer Controller Pod Identity association ID."
+  value = (
+    module.load_balancer_controller_iam.association_id
+  )
+}
