@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress-smoke
+  namespace: ingress-smoke
+  labels:
+    app: ingress-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingress-smoke
+  template:
+    metadata:
+      labels:
+        app: ingress-smoke
+    spec:
+      containers:
+        - name: nginx
+          image: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application:ingress-smoke-v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

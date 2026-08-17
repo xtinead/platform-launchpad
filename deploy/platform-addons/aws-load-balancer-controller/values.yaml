@@ -1,0 +1,20 @@
+clusterName: platform-launchpad-development-eks
+
+region: us-east-1
+
+vpcId: vpc-0bf728b9ab7b368cf
+
+replicaCount: 1
+
+image:
+  repository: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-aws-load-balancer-controller
+  tag: v3.5.0
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+
+enableShield: false
+enableWaf: false
+enableWafv2: false

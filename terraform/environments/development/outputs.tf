@@ -127,3 +127,107 @@ output "redis_port" {
   description = "Development Redis port."
   value       = module.redis.port
 }
+
+output "vpc_endpoint_security_group_id" {
+  description = "Development VPC endpoint security group."
+  value       = module.vpc_endpoints.endpoint_security_group_id
+}
+
+output "ecr_api_endpoint_id" {
+  description = "Development ECR API endpoint."
+  value       = module.vpc_endpoints.ecr_api_endpoint_id
+}
+
+output "ecr_dkr_endpoint_id" {
+  description = "Development ECR Docker endpoint."
+  value       = module.vpc_endpoints.ecr_dkr_endpoint_id
+}
+
+output "ec2_endpoint_id" {
+  description = "Development EC2 endpoint."
+  value       = module.vpc_endpoints.ec2_endpoint_id
+}
+
+output "s3_endpoint_id" {
+  description = "Development S3 gateway endpoint."
+  value       = module.vpc_endpoints.s3_endpoint_id
+}
+
+output "eks_endpoint_id" {
+  description = "Development Amazon EKS API endpoint."
+  value       = module.vpc_endpoints.eks_endpoint_id
+}
+
+output "eks_cluster_name" {
+  description = "Development EKS cluster name."
+  value       = module.eks.cluster_name
+}
+
+output "eks_cluster_arn" {
+  description = "Development EKS cluster ARN."
+  value       = module.eks.cluster_arn
+}
+
+output "eks_cluster_endpoint" {
+  description = "Development EKS Kubernetes API endpoint."
+  value       = module.eks.cluster_endpoint
+}
+
+output "eks_cluster_version" {
+  description = "Development EKS Kubernetes version."
+  value       = module.eks.cluster_version
+}
+
+output "eks_cluster_security_group_id" {
+  description = "Development EKS cluster security group."
+  value       = module.eks.cluster_security_group_id
+}
+
+output "eks_node_group_name" {
+  description = "Development EKS managed node group name."
+  value       = module.eks.node_group_name
+}
+
+output "eks_node_group_status" {
+  description = "Development EKS managed node group status."
+  value       = module.eks.node_group_status
+}
+
+output "eks_auth_endpoint_id" {
+  description = "Development Amazon EKS Auth API endpoint."
+  value       = module.vpc_endpoints.eks_auth_endpoint_id
+}
+
+output "elasticloadbalancing_endpoint_id" {
+  description = "Development Elastic Load Balancing API endpoint."
+  value = (
+    module.vpc_endpoints.elasticloadbalancing_endpoint_id
+  )
+}
+
+output "load_balancer_controller_repository_name" {
+  description = "AWS Load Balancer Controller ECR repository name."
+  value       = module.controller_ecr.repository_name
+}
+
+output "load_balancer_controller_repository_url" {
+  description = "AWS Load Balancer Controller ECR repository URL."
+  value       = module.controller_ecr.repository_url
+}
+
+output "load_balancer_controller_role_arn" {
+  description = "AWS Load Balancer Controller Pod Identity role ARN."
+  value       = module.load_balancer_controller_iam.role_arn
+}
+
+output "load_balancer_controller_policy_arn" {
+  description = "AWS Load Balancer Controller IAM policy ARN."
+  value       = module.load_balancer_controller_iam.policy_arn
+}
+
+output "load_balancer_controller_pod_identity_association_id" {
+  description = "AWS Load Balancer Controller Pod Identity association ID."
+  value = (
+    module.load_balancer_controller_iam.association_id
+  )
+}
