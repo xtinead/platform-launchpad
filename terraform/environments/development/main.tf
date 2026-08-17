@@ -114,3 +114,60 @@ module "redis" {
   engine_version = "7.1"
   port           = 6379
 }
+
+module "vpc_endpoints" {
+  source = "../../modules/vpc-endpoints"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  vpc_id   = module.networking.vpc_id
+  vpc_cidr = module.networking.vpc_cidr
+
+  private_subnet_ids = (
+    module.networking.private_app_subnet_ids
+  )
+
+  private_route_table_id = (
+    module.networking.private_app_route_table_id
+  )
+}
+
+module "eks" {
+  source = "../../modules/eks"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  kubernetes_version = "1.35"
+
+  private_subnet_ids = (
+    module.networking.private_app_subnet_ids
+  )
+
+  cluster_role_arn = module.iam.eks_cluster_role_arn
+  node_role_arn    = module.iam.eks_node_role_arn
+
+  admin_principal_arn = (
+    "arn:aws:iam::201854077833:role/Engineer"
+  )
+
+  public_access_cidrs = var.eks_public_access_cidrs
+
+  node_instance_types = [
+    "t3.medium",
+  ]
+
+  node_capacity_type = "ON_DEMAND"
+
+  node_desired_size = 1
+  node_min_size     = 1
+  node_max_size     = 2
+
+  node_disk_size = 20
+
+  depends_on = [
+    module.vpc_endpoints,
+  ]
+}

@@ -127,3 +127,68 @@ output "redis_port" {
   description = "Development Redis port."
   value       = module.redis.port
 }
+
+output "vpc_endpoint_security_group_id" {
+  description = "Development VPC endpoint security group."
+  value       = module.vpc_endpoints.endpoint_security_group_id
+}
+
+output "ecr_api_endpoint_id" {
+  description = "Development ECR API endpoint."
+  value       = module.vpc_endpoints.ecr_api_endpoint_id
+}
+
+output "ecr_dkr_endpoint_id" {
+  description = "Development ECR Docker endpoint."
+  value       = module.vpc_endpoints.ecr_dkr_endpoint_id
+}
+
+output "ec2_endpoint_id" {
+  description = "Development EC2 endpoint."
+  value       = module.vpc_endpoints.ec2_endpoint_id
+}
+
+output "s3_endpoint_id" {
+  description = "Development S3 gateway endpoint."
+  value       = module.vpc_endpoints.s3_endpoint_id
+}
+
+output "eks_endpoint_id" {
+  description = "Development Amazon EKS API endpoint."
+  value       = module.vpc_endpoints.eks_endpoint_id
+}
+
+output "eks_cluster_name" {
+  description = "Development EKS cluster name."
+  value       = module.eks.cluster_name
+}
+
+output "eks_cluster_arn" {
+  description = "Development EKS cluster ARN."
+  value       = module.eks.cluster_arn
+}
+
+output "eks_cluster_endpoint" {
+  description = "Development EKS Kubernetes API endpoint."
+  value       = module.eks.cluster_endpoint
+}
+
+output "eks_cluster_version" {
+  description = "Development EKS Kubernetes version."
+  value       = module.eks.cluster_version
+}
+
+output "eks_cluster_security_group_id" {
+  description = "Development EKS cluster security group."
+  value       = module.eks.cluster_security_group_id
+}
+
+output "eks_node_group_name" {
+  description = "Development EKS managed node group name."
+  value       = module.eks.node_group_name
+}
+
+output "eks_node_group_status" {
+  description = "Development EKS managed node group status."
+  value       = module.eks.node_group_status
+}
