@@ -31,10 +31,14 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     debug: bool = False
 
-    database_url: str
+    database_url: str | None = None
+    database_url_file: Path | None = None
+
     test_database_url: str | None = None
 
-    secret_key: SecretStr
+    secret_key: SecretStr | None = None
+    secret_key_file: Path | None = None
+
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
@@ -52,6 +56,39 @@ class Settings(BaseSettings):
             raise ValueError("API_V1_PREFIX cannot be empty")
 
         return normalized_value
+
+    def resolved_database_url(self) -> str:
+        """Return the configured database URL."""
+
+        if self.database_url:
+            return self.database_url
+
+        if self.database_url_file:
+            return self.database_url_file.read_text(
+                encoding="utf-8"
+            ).strip()
+
+        raise ValueError(
+            "DATABASE_URL or DATABASE_URL_FILE must be configured."
+        )
+
+    def resolved_secret_key(self) -> SecretStr:
+        """Return the configured application secret key."""
+
+        if self.secret_key:
+            return self.secret_key
+
+        if self.secret_key_file:
+            value = self.secret_key_file.read_text(
+                encoding="utf-8"
+            ).strip()
+
+            if value:
+                return SecretStr(value)
+
+        raise ValueError(
+            "SECRET_KEY or SECRET_KEY_FILE must be configured."
+        )
 
 
 @lru_cache
