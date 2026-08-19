@@ -172,6 +172,45 @@ module "eks" {
   ]
 }
 
+module "eks_workload_access" {
+  source = "../../modules/eks-workload-access"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  eks_security_group_id = (
+    module.eks.cluster_security_group_id
+  )
+
+  postgres_security_group_id = (
+    module.security_groups.postgres_security_group_id
+  )
+
+  redis_security_group_id = (
+    module.security_groups.redis_security_group_id
+  )
+
+  postgres_port = 5432
+  redis_port    = 6379
+}
+
+module "application_runtime_iam" {
+  source = "../../modules/application-runtime-iam"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  cluster_name = module.eks.cluster_name
+  namespace    = "platform-launchpad"
+
+  service_account_names = [
+    "backend",
+    "worker",
+  ]
+
+  runtime_secret_arn = module.secrets.runtime_secret_arn
+}
+
 module "load_balancer_controller_iam" {
   source = "../../modules/load-balancer-controller-iam"
 
@@ -186,11 +225,6 @@ module "load_balancer_controller_iam" {
   iam_policy_document = file(
     "${path.module}/../../policies/aws-load-balancer-controller.json"
   )
-
-  depends_on = [
-    module.eks,
-    module.vpc_endpoints,
-  ]
 }
 
 module "controller_ecr" {

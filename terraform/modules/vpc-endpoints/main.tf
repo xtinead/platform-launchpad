@@ -241,3 +241,32 @@ resource "aws_vpc_endpoint" "elasticloadbalancing" {
     }
   )
 }
+
+# -------------------------------------------------------------------
+# AWS Secrets Manager
+# -------------------------------------------------------------------
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id = var.vpc_id
+
+  service_name = (
+    "com.amazonaws.${var.aws_region}.secretsmanager"
+  )
+
+  vpc_endpoint_type = "Interface"
+
+  subnet_ids = var.private_subnet_ids
+
+  security_group_ids = [
+    aws_security_group.endpoints.id,
+  ]
+
+  private_dns_enabled = true
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-secretsmanager-endpoint"
+    }
+  )
+}
