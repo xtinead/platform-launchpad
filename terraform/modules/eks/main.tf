@@ -233,3 +233,30 @@ resource "aws_eks_addon" "pod_identity_agent" {
     aws_eks_node_group.primary,
   ]
 }
+
+# -------------------------------------------------------------------
+# AWS Secrets Store CSI Driver Provider
+# -------------------------------------------------------------------
+
+resource "aws_eks_addon" "secrets_store_csi_provider" {
+  cluster_name = aws_eks_cluster.this.name
+
+  addon_name    = "aws-secrets-store-csi-driver-provider"
+  addon_version = "v3.1.2-eksbuild.1"
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-secrets-store-csi-provider"
+      Tier = "platform"
+    }
+  )
+
+  depends_on = [
+    aws_eks_node_group.primary,
+    aws_eks_addon.pod_identity_agent,
+  ]
+}

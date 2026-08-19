@@ -231,3 +231,39 @@ output "load_balancer_controller_pod_identity_association_id" {
     module.load_balancer_controller_iam.association_id
   )
 }
+
+output "eks_postgres_ingress_rule_id" {
+  description = "Rule allowing EKS workloads to access PostgreSQL."
+  value = (
+    module.eks_workload_access.postgres_ingress_rule_id
+  )
+}
+
+output "eks_redis_ingress_rule_id" {
+  description = "Rule allowing EKS workloads to access Redis."
+  value = (
+    module.eks_workload_access.redis_ingress_rule_id
+  )
+}
+
+output "secretsmanager_endpoint_id" {
+  description = "Secrets Manager interface VPC endpoint ID."
+  value       = module.vpc_endpoints.secretsmanager_endpoint_id
+}
+
+output "application_runtime_role_arn" {
+  description = "Application runtime Pod Identity role ARN."
+  value       = module.application_runtime_iam.role_arn
+}
+
+output "application_runtime_policy_arn" {
+  description = "Application runtime Secrets Manager policy ARN."
+  value       = module.application_runtime_iam.policy_arn
+}
+
+output "application_runtime_pod_identity_association_ids" {
+  description = "Application runtime Pod Identity association IDs."
+  value = (
+    module.application_runtime_iam.pod_identity_association_ids
+  )
+}

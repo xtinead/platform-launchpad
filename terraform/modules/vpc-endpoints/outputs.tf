@@ -37,3 +37,8 @@ output "elasticloadbalancing_endpoint_id" {
   description = "Elastic Load Balancing API VPC endpoint ID."
   value       = aws_vpc_endpoint.elasticloadbalancing.id
 }
+
+output "secretsmanager_endpoint_id" {
+  description = "Secrets Manager interface VPC endpoint ID."
+  value       = aws_vpc_endpoint.secretsmanager.id
+}
