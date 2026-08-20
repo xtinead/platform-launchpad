@@ -69,7 +69,7 @@ module "secrets" {
   project_name = var.project_name
   environment  = var.environment
 
-  recovery_window_in_days = 7
+  recovery_window_in_days = 0
 }
 
 module "rds" {

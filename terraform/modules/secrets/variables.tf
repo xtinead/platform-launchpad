@@ -26,12 +26,15 @@ variable "recovery_window_in_days" {
 
   validation {
     condition = (
-      var.recovery_window_in_days >= 7 &&
-      var.recovery_window_in_days <= 30
+      var.recovery_window_in_days == 0 ||
+      (
+        var.recovery_window_in_days >= 7 &&
+        var.recovery_window_in_days <= 30
+      )
     )
 
     error_message = (
-      "recovery_window_in_days must be between 7 and 30."
+      "recovery_window_in_days must be 0 or between 7 and 30."
     )
   }
 }
