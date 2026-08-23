@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { ApiError } from "@/lib/api";
 import {
   clearSession,
   getAccessToken,
   getCurrentUser,
 } from "@/lib/auth-session";
+import {
+  listDeploymentRequests,
+  listEnvironments,
+} from "@/lib/platform-api";
+import type {
+  DeploymentRequestListResponse,
+  EnvironmentListResponse,
+} from "@/lib/platform-types";
 import type { UserSummary } from "@/lib/auth-types";
 
 type SessionSnapshot = {
@@ -78,6 +88,16 @@ export default function DashboardPage() {
     getServerSessionSnapshot,
   );
 
+  const [environments, setEnvironments] =
+    useState<EnvironmentListResponse | null>(null);
+
+  const [deploymentRequests, setDeploymentRequests] =
+    useState<DeploymentRequestListResponse | null>(null);
+
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     if (
       isHydrated &&
@@ -91,6 +111,67 @@ export default function DashboardPage() {
     session.token,
     session.user,
   ]);
+
+  useEffect(() => {
+    if (!isHydrated || !session.token) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDashboardData() {
+      setIsLoadingData(true);
+      setError(null);
+
+      try {
+        const [
+          environmentResponse,
+          deploymentRequestResponse,
+        ] = await Promise.all([
+          listEnvironments(session.token as string),
+          listDeploymentRequests(session.token as string),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setEnvironments(environmentResponse);
+        setDeploymentRequests(deploymentRequestResponse);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        if (error instanceof ApiError) {
+          if (
+            error.code === "invalid_token" ||
+            error.code === "token_expired" ||
+            error.code === "authentication_required"
+          ) {
+            clearSession();
+            router.replace("/login");
+            return;
+          }
+
+          setError(error.message);
+          return;
+        }
+
+        setError("Unable to load platform data.");
+      } finally {
+        if (!cancelled) {
+          setIsLoadingData(false);
+        }
+      }
+    }
+
+    void loadDashboardData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHydrated, router, session.token]);
 
   function handleSignOut() {
     clearSession();
@@ -118,6 +199,16 @@ export default function DashboardPage() {
   }
 
   const user = session.user;
+
+  const activeDeploymentCount =
+    deploymentRequests?.items.filter(
+      (request) =>
+        request.status === "queued" ||
+        request.status === "processing",
+    ).length ?? 0;
+
+  const environmentCount =
+    environments?.pagination.total_items ?? 0;
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -156,37 +247,83 @@ export default function DashboardPage() {
       </header>
 
       <section className="mx-auto max-w-7xl px-6 py-10">
-        <p className="text-sm font-semibold uppercase tracking-widest text-blue-600">
-          Dashboard
-        </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-widest text-blue-600">
+              Dashboard
+            </p>
 
-        <h1 className="mt-2 text-3xl font-bold text-slate-950">
-          Welcome, {user.full_name}
-        </h1>
+            <h1 className="mt-2 text-3xl font-bold text-slate-950">
+              Welcome, {user.full_name}
+            </h1>
 
-        <p className="mt-2 text-slate-600">
-          Your platform environments and deployment activity will appear here.
-        </p>
+            <p className="mt-2 text-slate-600">
+              Monitor environments and deployment activity from one place.
+            </p>
+          </div>
+
+          <Link
+            href="/environments"
+            className="inline-flex rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            View environments
+          </Link>
+        </div>
+
+        {error ? (
+          <div className="mt-8 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        ) : null}
 
         <div className="mt-10 grid gap-6 md:grid-cols-3">
-          {[
-            ["Environments", "0"],
-            ["Active Deployments", "0"],
-            ["Role", user.role],
-          ].map(([label, value]) => (
-            <article
-              key={label}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
-            >
-              <p className="text-sm font-medium text-slate-500">
-                {label}
-              </p>
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Environments
+            </p>
 
-              <p className="mt-3 text-3xl font-bold capitalize text-slate-950">
-                {value}
+            <p className="mt-3 text-3xl font-bold text-slate-950">
+              {isLoadingData ? "—" : environmentCount}
+            </p>
+          </article>
+
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Active Deployments
+            </p>
+
+            <p className="mt-3 text-3xl font-bold text-slate-950">
+              {isLoadingData ? "—" : activeDeploymentCount}
+            </p>
+          </article>
+
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Role
+            </p>
+
+            <p className="mt-3 text-3xl font-bold capitalize text-slate-950">
+              {user.role}
+            </p>
+          </article>
+        </div>
+
+        <div className="mt-10 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">
+                Platform status
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Live data from the Platform Launchpad API.
               </p>
-            </article>
-          ))}
+            </div>
+
+            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+              Connected
+            </span>
+          </div>
         </div>
       </section>
     </main>
