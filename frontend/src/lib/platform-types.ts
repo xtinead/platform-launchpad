@@ -77,3 +77,13 @@ export interface DeploymentRequestListResponse {
   items: DeploymentRequestResponse[];
   pagination: PaginationMetadata;
 }
+
+export type DeploymentRequestCreateRequest = {
+  operation: DeploymentOperation;
+  request_payload?: Record<string, unknown>;
+};
+
+export type EnvironmentOperationResponse = {
+  environment: EnvironmentResponse;
+  deployment_request: DeploymentRequestResponse;
+};

@@ -17,10 +17,12 @@ import {
   getCurrentUser,
 } from "@/lib/auth-session";
 import {
+  createDeploymentRequest,
   createEnvironment,
   listEnvironments,
 } from "@/lib/platform-api";
 import type {
+  DeploymentOperation,
   EnvironmentCreateRequest,
   EnvironmentListResponse,
   EnvironmentStatus,
@@ -90,6 +92,28 @@ const statusStyles: Record<EnvironmentStatus, string> = {
   destroyed: "bg-slate-200 text-slate-700",
 };
 
+const operationsByStatus: Record<
+  EnvironmentStatus,
+  DeploymentOperation[]
+> = {
+  pending: ["provision", "destroy"],
+  provisioning: [],
+  active: ["upgrade", "destroy"],
+  failed: ["retry", "destroy"],
+  destroying: [],
+  destroyed: [],
+};
+
+const operationLabels: Record<
+  DeploymentOperation,
+  string
+> = {
+  provision: "Provision",
+  destroy: "Destroy",
+  retry: "Retry",
+  upgrade: "Upgrade",
+};
+
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -116,14 +140,30 @@ export default function EnvironmentsPage() {
     useState<EnvironmentListResponse | null>(null);
 
   const [name, setName] = useState("");
+
   const [environmentType, setEnvironmentType] =
     useState<EnvironmentType>("development");
+
   const [applicationVersion, setApplicationVersion] =
     useState("1.0.0");
+
   const [description, setDescription] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
+
   const [isCreating, setIsCreating] = useState(false);
+
+  const [pendingOperation, setPendingOperation] =
+    useState<{
+      environmentId: string;
+      operation: DeploymentOperation;
+    } | null>(null);
+
+  const [operationError, setOperationError] =
+    useState<string | null>(null);
+
+  const [operationSuccess, setOperationSuccess] =
+    useState<string | null>(null);
 
   const [loadError, setLoadError] =
     useState<string | null>(null);
@@ -183,23 +223,23 @@ export default function EnvironmentsPage() {
     }
   }, [router, session.token]);
 
- useEffect(() => {
-  if (!isHydrated || !session.token) {
-    return;
-  }
+  useEffect(() => {
+    if (!isHydrated || !session.token) {
+      return;
+    }
 
-  const timeoutId = window.setTimeout(() => {
-    void loadEnvironments();
-  }, 0);
+    const timeoutId = window.setTimeout(() => {
+      void loadEnvironments();
+    }, 0);
 
-  return () => {
-    window.clearTimeout(timeoutId);
-  };
-}, [
-  isHydrated,
-  loadEnvironments,
-  session.token,
-]);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    isHydrated,
+    loadEnvironments,
+    session.token,
+  ]);
 
   async function handleCreateEnvironment(
     event: FormEvent<HTMLFormElement>,
@@ -261,6 +301,69 @@ export default function EnvironmentsPage() {
     }
   }
 
+  async function handleLifecycleOperation(
+    environmentId: string,
+    environmentName: string,
+    operation: DeploymentOperation,
+  ) {
+    if (!session.token) {
+      router.replace("/login");
+      return;
+    }
+
+    if (
+      operation === "destroy" &&
+      !window.confirm(
+        `Queue destruction of environment "${environmentName}"?`,
+      )
+    ) {
+      return;
+    }
+
+    setPendingOperation({
+      environmentId,
+      operation,
+    });
+
+    setOperationError(null);
+    setOperationSuccess(null);
+
+    try {
+      const response = await createDeploymentRequest(
+        session.token,
+        environmentId,
+        operation,
+      );
+
+      setOperationSuccess(
+        `${operationLabels[operation]} request queued for "${environmentName}". ` +
+          `Deployment request status: ${response.deployment_request.status}.`,
+      );
+
+      await loadEnvironments();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (
+          error.code === "invalid_token" ||
+          error.code === "token_expired" ||
+          error.code === "authentication_required"
+        ) {
+          clearSession();
+          router.replace("/login");
+          return;
+        }
+
+        setOperationError(error.message);
+      } else {
+        setOperationError(
+          `Unable to queue ${operation} request.`,
+        );
+      }
+    } finally {
+      setPendingOperation(null);
+    }
+  }
+
   function handleSignOut() {
     clearSession();
     router.replace("/login");
@@ -308,6 +411,13 @@ export default function EnvironmentsPage() {
               className="text-sm font-medium text-slate-600 hover:text-slate-950"
             >
               Dashboard
+            </Link>
+
+            <Link
+              href="/deployments"
+              className="text-sm font-medium text-slate-600 hover:text-slate-950"
+            >
+              Deployments
             </Link>
 
             <button
@@ -399,9 +509,11 @@ export default function EnvironmentsPage() {
                   <option value="development">
                     Development
                   </option>
+
                   <option value="staging">
                     Staging
                   </option>
+
                   <option value="demo">
                     Demo
                   </option>
@@ -509,6 +621,18 @@ export default function EnvironmentsPage() {
               </div>
             ) : null}
 
+            {operationError ? (
+              <div className="mx-6 mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {operationError}
+              </div>
+            ) : null}
+
+            {operationSuccess ? (
+              <div className="mx-6 mt-6 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                {operationSuccess}
+              </div>
+            ) : null}
+
             {!loadError &&
             !isLoading &&
             environments.length === 0 ? (
@@ -581,8 +705,83 @@ export default function EnvironmentsPage() {
                           Open environment
                         </a>
                       ) : (
-                        <span>No external URL yet</span>
+                        <span>
+                          No external URL yet
+                        </span>
                       )}
+                    </div>
+
+                    <div className="mt-5 border-t border-slate-100 pt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                            Lifecycle actions
+                          </p>
+
+                          {operationsByStatus[
+                            environment.status
+                          ].length === 0 ? (
+                            <p className="mt-1 text-sm text-slate-500">
+                              {environment.status ===
+                              "provisioning"
+                                ? "Provisioning is in progress."
+                                : environment.status ===
+                                    "destroying"
+                                  ? "Destruction is in progress."
+                                  : "No lifecycle actions are available."}
+                            </p>
+                          ) : null}
+                        </div>
+
+                        {operationsByStatus[
+                          environment.status
+                        ].length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {operationsByStatus[
+                              environment.status
+                            ].map((operation) => {
+                              const isPending =
+                                pendingOperation?.environmentId ===
+                                  environment.id &&
+                                pendingOperation.operation ===
+                                  operation;
+
+                              const environmentBusy =
+                                pendingOperation?.environmentId ===
+                                environment.id;
+
+                              return (
+                                <button
+                                  key={operation}
+                                  type="button"
+                                  disabled={
+                                    environmentBusy
+                                  }
+                                  onClick={() =>
+                                    void handleLifecycleOperation(
+                                      environment.id,
+                                      environment.name,
+                                      operation,
+                                    )
+                                  }
+                                  className={
+                                    operation ===
+                                    "destroy"
+                                      ? "rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                      : "rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                  }
+                                >
+                                  {isPending
+                                    ? "Queueing..."
+                                    : operationLabels[
+                                        operation
+                                      ]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </article>
                 ))}
