@@ -1,0 +1,142 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+    }
+
+    environment {
+        BACKEND_IMAGE = "platform-launchpad-backend"
+        FRONTEND_IMAGE = "platform-launchpad-frontend"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short=12 HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                echo "Building commit: ${env.GIT_COMMIT_SHORT}"
+                echo "Branch: ${env.BRANCH_NAME ?: 'unknown'}"
+            }
+        }
+
+        stage('Backend Validation') {
+            environment {
+        TEST_DATABASE_URL = credentials('platform-launchpad-test-database-url')
+        }
+
+            steps {
+                dir('backend') {
+                    sh '''
+                        set -eu
+
+                        python --version
+
+                        python -m venv .jenkins-venv
+                        . .jenkins-venv/bin/activate
+
+                        python -m pip install --upgrade pip
+                        python -m pip install -r requirements-dev.txt
+
+                        python -m pytest
+                    '''
+                }
+            }
+            post {
+                always {
+                    sh 'rm -rf backend/.jenkins-venv'
+                }
+            }
+        }
+
+        stage('Frontend Validation') {
+            steps {
+                dir('frontend') {
+                    sh '''
+                        set -eu
+
+                        node --version
+                        npm --version
+
+                        npm ci
+                        npm run lint
+                        npm run build
+                    '''
+                }
+            }
+        }
+
+        stage('Build Backend Image') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker build \
+                        --file docker/backend/Dockerfile \
+                        --tag "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        .
+                '''
+            }
+        }
+
+        stage('Build Frontend Image') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker build \
+                        --file docker/frontend/Dockerfile \
+                        --tag "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        .
+                '''
+            }
+        }
+
+        stage('Verify Images') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker image inspect \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        >/dev/null
+
+                    docker image inspect \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        >/dev/null
+
+                    echo "Backend/worker image:"
+                    docker image ls \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}"
+
+                    echo "Frontend image:"
+                    docker image ls \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "CI validation completed successfully for ${env.GIT_COMMIT_SHORT}."
+        }
+
+        failure {
+            echo "CI validation failed."
+        }
+
+        always {
+            echo "Jenkins build ${env.BUILD_NUMBER} finished."
+        }
+    }
+}
