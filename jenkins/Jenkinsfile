@@ -29,34 +29,67 @@ pipeline {
             }
         }
 
-        stage('Backend Validation') {
-            environment {
-        TEST_DATABASE_URL = credentials('platform-launchpad-test-database-url')
-        }
+       stage('Backend Validation') {
+    steps {
+        dir('backend') {
+            sh '''
+                set -eu
 
-            steps {
-                dir('backend') {
-                    sh '''
-                        set -eu
+                TEST_DB_CONTAINER="platform-launchpad-test-db-${BUILD_NUMBER}"
+                TEST_DB_PASSWORD="jenkins-test-password"
 
-                        python --version
-
-                        python -m venv .jenkins-venv
-                        . .jenkins-venv/bin/activate
-
-                        python -m pip install --upgrade pip
-                        python -m pip install -r requirements-dev.txt
-
-                        python -m pytest
-                    '''
+                cleanup() {
+                    docker rm -f "${TEST_DB_CONTAINER}" >/dev/null 2>&1 || true
+                    rm -rf .jenkins-venv
                 }
-            }
-            post {
-                always {
-                    sh 'rm -rf backend/.jenkins-venv'
-                }
-            }
+
+                trap cleanup EXIT
+
+                docker run -d \
+                    --name "${TEST_DB_CONTAINER}" \
+                    -e POSTGRES_USER=platform_user \
+                    -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
+                    -e POSTGRES_DB=platform_launchpad_test \
+                    -p 5433:5432 \
+                    postgres:16
+
+                echo "Waiting for PostgreSQL..."
+
+                for attempt in $(seq 1 30); do
+                    if docker exec "${TEST_DB_CONTAINER}" \
+                        pg_isready \
+                        -U platform_user \
+                        -d platform_launchpad_test \
+                        >/dev/null 2>&1
+                    then
+                        echo "PostgreSQL is ready."
+                        break
+                    fi
+
+                    if [ "${attempt}" -eq 30 ]; then
+                        echo "PostgreSQL did not become ready."
+                        docker logs "${TEST_DB_CONTAINER}"
+                        exit 1
+                    fi
+
+                    sleep 2
+                done
+
+                python --version
+
+                python -m venv .jenkins-venv
+                . .jenkins-venv/bin/activate
+
+                python -m pip install --upgrade pip
+                python -m pip install -r requirements-dev.txt
+
+                export TEST_DATABASE_URL="postgresql+psycopg2://platform_user:${TEST_DB_PASSWORD}@127.0.0.1:5433/platform_launchpad_test"
+
+                python -m pytest
+            '''
         }
+    }
+}
 
         stage('Frontend Validation') {
             steps {
