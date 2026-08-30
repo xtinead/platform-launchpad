@@ -63,6 +63,15 @@ module "ecr" {
   max_image_count      = 10
 }
 
+module "ci_delivery_iam" {
+  source = "../../modules/ci-delivery-iam"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  ecr_repository_arn = module.ecr.repository_arn
+}
+
 module "secrets" {
   source = "../../modules/secrets"
 
