@@ -102,7 +102,12 @@ pipeline {
                         python -m pip install \
                             -r requirements-dev.txt
 
-                        export TEST_DATABASE_URL="postgresql+psycopg2://platform_user:${TEST_DB_PASSWORD}@127.0.0.1:5433/platform_launchpad_test"
+                        TEST_DATABASE_URL="postgresql+psycopg2://platform_user:${TEST_DB_PASSWORD}@127.0.0.1:5433/platform_launchpad_test"
+
+                        export DATABASE_URL="${TEST_DATABASE_URL}"
+                        export TEST_DATABASE_URL
+
+                        export SECRET_KEY="platform-launchpad-jenkins-test-secret-key"
 
                         python -m pytest
                     '''
