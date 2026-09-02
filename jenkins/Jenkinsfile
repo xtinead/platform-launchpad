@@ -91,9 +91,9 @@ pipeline {
                             sleep 2
                         done
 
-                        python --version
+                        python3.12 --version
 
-                        python -m venv .jenkins-venv
+                        python3.12 -m venv .jenkins-venv
 
                         . .jenkins-venv/bin/activate
 
@@ -465,7 +465,7 @@ EOF
 
                         cd "${GITOPS_DIR}"
 
-                        python - "${GITOPS_OVERLAY}" \
+                        python3.12 - "${GITOPS_OVERLAY}" \
                             "${BACKEND_DIGEST}" \
                             "${FRONTEND_DIGEST}" <<'PY'
 import sys
