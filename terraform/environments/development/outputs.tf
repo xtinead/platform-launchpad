@@ -267,3 +267,35 @@ output "application_runtime_pod_identity_association_ids" {
     module.application_runtime_iam.pod_identity_association_ids
   )
 }
+
+output "ci_delivery_jenkins_user_name" {
+  description = "Jenkins CI bootstrap IAM user name."
+  value       = module.ci_delivery_iam.jenkins_user_name
+}
+
+output "ci_delivery_jenkins_user_arn" {
+  description = "Jenkins CI bootstrap IAM user ARN."
+  value       = module.ci_delivery_iam.jenkins_user_arn
+}
+
+output "ci_delivery_role_name" {
+  description = "Jenkins CI application-delivery role name."
+  value       = module.ci_delivery_iam.role_name
+}
+
+output "ci_delivery_role_arn" {
+  description = "Jenkins CI application-delivery role ARN."
+  value       = module.ci_delivery_iam.role_arn
+}
+
+output "ci_delivery_ecr_publish_policy_arn" {
+  description = "Jenkins CI ECR publication policy ARN."
+  value       = module.ci_delivery_iam.ecr_publish_policy_arn
+}
+
+output "ci_delivery_assume_role_policy_arn" {
+  description = "Jenkins bootstrap AssumeRole policy ARN."
+  value = (
+    module.ci_delivery_iam.jenkins_assume_role_policy_arn
+  )
+}

@@ -20,6 +20,8 @@ backend/__pycache__
 
 frontend/node_modules
 frontend/.next
+frontend/.env*
+
 
 .pytest_cache
 .coverage

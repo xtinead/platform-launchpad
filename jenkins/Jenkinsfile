@@ -1,0 +1,637 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+    }
+
+    environment {
+        AWS_REGION = "us-east-1"
+        AWS_ACCOUNT_ID = "201854077833"
+
+        ECR_REPOSITORY = "platform-launchpad-development-application"
+        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+        BACKEND_IMAGE = "platform-launchpad-backend"
+        FRONTEND_IMAGE = "platform-launchpad-frontend"
+
+        CI_DELIVERY_ROLE_ARN = "arn:aws:iam::201854077833:role/platform-launchpad-development-ci-delivery"
+
+        GITOPS_REPOSITORY_URL = "https://github.com/xtinead/platform-launchpad-gitops.git"
+        GITOPS_BRANCH = "main"
+        GITOPS_OVERLAY = "overlays/development/kustomization.yaml"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short=12 HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                echo "Building commit: ${env.GIT_COMMIT_SHORT}"
+                echo "Branch: ${env.BRANCH_NAME ?: 'unknown'}"
+            }
+        }
+
+        stage('Backend Validation') {
+            steps {
+                dir('backend') {
+                    sh '''
+                        set -eu
+
+                        TEST_DB_CONTAINER="platform-launchpad-test-db-${BUILD_NUMBER}"
+                        TEST_DB_PASSWORD="jenkins-test-password"
+
+                        cleanup() {
+                            docker rm -f "${TEST_DB_CONTAINER}" \
+                                >/dev/null 2>&1 || true
+
+                            rm -rf .jenkins-venv
+                        }
+
+                        trap cleanup EXIT
+
+                        docker run -d \
+                            --name "${TEST_DB_CONTAINER}" \
+                            -e POSTGRES_USER=platform_user \
+                            -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
+                            -e POSTGRES_DB=platform_launchpad_test \
+                            -p 5433:5432 \
+                            postgres:16
+
+                        echo "Waiting for PostgreSQL..."
+
+                        for attempt in $(seq 1 30); do
+                            if docker exec "${TEST_DB_CONTAINER}" \
+                                pg_isready \
+                                -U platform_user \
+                                -d platform_launchpad_test \
+                                >/dev/null 2>&1
+                            then
+                                echo "PostgreSQL is ready."
+                                break
+                            fi
+
+                            if [ "${attempt}" -eq 30 ]; then
+                                echo "PostgreSQL did not become ready."
+
+                                docker logs "${TEST_DB_CONTAINER}"
+
+                                exit 1
+                            fi
+
+                            sleep 2
+                        done
+
+                        python --version
+
+                        python -m venv .jenkins-venv
+
+                        . .jenkins-venv/bin/activate
+
+                        python -m pip install --upgrade pip
+
+                        python -m pip install \
+                            -r requirements-dev.txt
+
+                        export TEST_DATABASE_URL="postgresql+psycopg2://platform_user:${TEST_DB_PASSWORD}@127.0.0.1:5433/platform_launchpad_test"
+
+                        python -m pytest
+                    '''
+                }
+            }
+        }
+
+        stage('Frontend Validation') {
+            steps {
+                dir('frontend') {
+                    sh '''
+                        set -eu
+
+                        node --version
+                        npm --version
+
+                        npm ci
+                        npm run lint
+                        npm run build
+                    '''
+                }
+            }
+        }
+
+        stage('Build Backend Image') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker build \
+                        --pull \
+                        --file docker/backend/Dockerfile \
+                        --tag "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        .
+                '''
+            }
+        }
+
+        stage('Build Frontend Image') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker build \
+                        --pull \
+                        --file docker/frontend/Dockerfile \
+                        --tag "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        .
+                '''
+            }
+        }
+
+        stage('Verify Images') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker image inspect \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        >/dev/null
+
+                    docker image inspect \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        >/dev/null
+
+                    echo "Backend/worker image:"
+
+                    docker image ls \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}"
+
+                    echo "Frontend image:"
+
+                    docker image ls \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}"
+                '''
+            }
+        }
+
+        stage('Scan Container Images') {
+            steps {
+                sh '''
+                    set -eu
+
+                    TRIVY_IMAGE="aquasec/trivy:0.67.2"
+
+                    echo "Scanning backend/worker image..."
+
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v "${HOME}/.cache/trivy:/root/.cache/" \
+                        "${TRIVY_IMAGE}" \
+                        image \
+                        --exit-code 1 \
+                        --severity CRITICAL \
+                        --ignore-unfixed \
+                        --scanners vuln \
+                        --skip-version-check \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}"
+
+                    echo "Scanning frontend image..."
+
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v "${HOME}/.cache/trivy:/root/.cache/" \
+                        "${TRIVY_IMAGE}" \
+                        image \
+                        --exit-code 1 \
+                        --severity CRITICAL \
+                        --ignore-unfixed \
+                        --scanners vuln \
+                        --skip-version-check \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}"
+                '''
+            }
+        }
+
+        stage('Assume CI Delivery Role') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'platform-launchpad-jenkins-access-key-id',
+                        variable: 'BOOTSTRAP_AWS_ACCESS_KEY_ID'
+                    ),
+                    string(
+                        credentialsId: 'platform-launchpad-jenkins-secret-access-key',
+                        variable: 'BOOTSTRAP_AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    script {
+                        def credentials = sh(
+                            script: '''
+                                set -eu
+
+                                AWS_ACCESS_KEY_ID="${BOOTSTRAP_AWS_ACCESS_KEY_ID}" \
+                                AWS_SECRET_ACCESS_KEY="${BOOTSTRAP_AWS_SECRET_ACCESS_KEY}" \
+                                AWS_SESSION_TOKEN="" \
+                                aws sts assume-role \
+                                    --role-arn "${CI_DELIVERY_ROLE_ARN}" \
+                                    --role-session-name "platform-launchpad-${BUILD_NUMBER}" \
+                                    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim().split()
+
+                        if (credentials.size() != 3) {
+                            error(
+                                "Unable to obtain temporary CI delivery credentials."
+                            )
+                        }
+
+                        env.AWS_ACCESS_KEY_ID = credentials[0]
+                        env.AWS_SECRET_ACCESS_KEY = credentials[1]
+                        env.AWS_SESSION_TOKEN = credentials[2]
+                    }
+                }
+
+                sh '''
+                    set -eu
+
+                    echo "Assumed CI delivery identity:"
+
+                    aws sts get-caller-identity \
+                        --query 'Arn' \
+                        --output text
+                '''
+            }
+        }
+
+        stage('Authenticate to ECR') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                sh '''
+                    set -eu
+
+                    aws ecr get-login-password \
+                        --region "${AWS_REGION}" \
+                    | docker login \
+                        --username AWS \
+                        --password-stdin "${ECR_REGISTRY}"
+                '''
+            }
+        }
+
+        stage('Publish Images') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                sh '''
+                    set -eu
+
+                    BACKEND_TAG="backend-sha-${GIT_COMMIT_SHORT}"
+                    FRONTEND_TAG="frontend-sha-${GIT_COMMIT_SHORT}"
+
+                    BACKEND_REMOTE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${BACKEND_TAG}"
+                    FRONTEND_REMOTE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${FRONTEND_TAG}"
+
+                    docker tag \
+                        "${BACKEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        "${BACKEND_REMOTE}"
+
+                    docker tag \
+                        "${FRONTEND_IMAGE}:${GIT_COMMIT_SHORT}" \
+                        "${FRONTEND_REMOTE}"
+
+                    docker push "${BACKEND_REMOTE}"
+
+                    docker push "${FRONTEND_REMOTE}"
+
+                    printf '%s\\n' "${BACKEND_REMOTE}" \
+                        > backend-image-reference.txt
+
+                    printf '%s\\n' "${FRONTEND_REMOTE}" \
+                        > frontend-image-reference.txt
+                '''
+            }
+        }
+
+        stage('Capture Image Digests') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                sh '''
+                    set -eu
+
+                    BACKEND_TAG="backend-sha-${GIT_COMMIT_SHORT}"
+                    FRONTEND_TAG="frontend-sha-${GIT_COMMIT_SHORT}"
+
+                    BACKEND_DIGEST="$(
+                        aws ecr describe-images \
+                            --region "${AWS_REGION}" \
+                            --repository-name "${ECR_REPOSITORY}" \
+                            --image-ids imageTag="${BACKEND_TAG}" \
+                            --query 'imageDetails[0].imageDigest' \
+                            --output text
+                    )"
+
+                    FRONTEND_DIGEST="$(
+                        aws ecr describe-images \
+                            --region "${AWS_REGION}" \
+                            --repository-name "${ECR_REPOSITORY}" \
+                            --image-ids imageTag="${FRONTEND_TAG}" \
+                            --query 'imageDetails[0].imageDigest' \
+                            --output text
+                    )"
+
+                    if ! printf '%s\\n' "${BACKEND_DIGEST}" \
+                        | grep -Eq '^sha256:[0-9a-f]{64}$'
+                    then
+                        echo "Unable to resolve a valid backend image digest."
+                        exit 1
+                    fi
+
+                    if ! printf '%s\\n' "${FRONTEND_DIGEST}" \
+                        | grep -Eq '^sha256:[0-9a-f]{64}$'
+                    then
+                        echo "Unable to resolve a valid frontend image digest."
+                        exit 1
+                    fi
+
+                    printf '%s\\n' "${BACKEND_DIGEST}" \
+                        > backend-image-digest.txt
+
+                    printf '%s\\n' "${FRONTEND_DIGEST}" \
+                        > frontend-image-digest.txt
+
+                    echo "Backend digest: ${BACKEND_DIGEST}"
+                    echo "Frontend digest: ${FRONTEND_DIGEST}"
+                '''
+            }
+        }
+
+        stage('Update GitOps Desired State') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'platform-launchpad-gitops-github',
+                        usernameVariable: 'GITOPS_GITHUB_USERNAME',
+                        passwordVariable: 'GITOPS_GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+
+                        GITOPS_DIR="platform-launchpad-gitops"
+                        GIT_ASKPASS_SCRIPT="$(mktemp)"
+
+                        cleanup() {
+                            rm -f "${GIT_ASKPASS_SCRIPT}"
+                            rm -rf "${GITOPS_DIR}"
+                        }
+
+                        trap cleanup EXIT
+
+                        cat > "${GIT_ASKPASS_SCRIPT}" <<'EOF'
+#!/bin/sh
+
+case "$1" in
+    *Username*)
+        printf '%s\\n' "${GITOPS_GITHUB_USERNAME}"
+        ;;
+    *Password*)
+        printf '%s\\n' "${GITOPS_GITHUB_TOKEN}"
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+
+                        chmod 700 "${GIT_ASKPASS_SCRIPT}"
+
+                        export GIT_ASKPASS="${GIT_ASKPASS_SCRIPT}"
+                        export GIT_TERMINAL_PROMPT=0
+
+                        rm -rf "${GITOPS_DIR}"
+
+                        git clone \
+                            --branch "${GITOPS_BRANCH}" \
+                            --single-branch \
+                            "${GITOPS_REPOSITORY_URL}" \
+                            "${GITOPS_DIR}"
+
+                        BACKEND_DIGEST="$(
+                            cat backend-image-digest.txt
+                        )"
+
+                        FRONTEND_DIGEST="$(
+                            cat frontend-image-digest.txt
+                        )"
+
+                        if ! printf '%s\\n' "${BACKEND_DIGEST}" \
+                            | grep -Eq '^sha256:[0-9a-f]{64}$'
+                        then
+                            echo "Invalid backend image digest."
+                            exit 1
+                        fi
+
+                        if ! printf '%s\\n' "${FRONTEND_DIGEST}" \
+                            | grep -Eq '^sha256:[0-9a-f]{64}$'
+                        then
+                            echo "Invalid frontend image digest."
+                            exit 1
+                        fi
+
+                        cd "${GITOPS_DIR}"
+
+                        python - "${GITOPS_OVERLAY}" \
+                            "${BACKEND_DIGEST}" \
+                            "${FRONTEND_DIGEST}" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+backend_digest = sys.argv[2]
+frontend_digest = sys.argv[3]
+
+if not path.is_file():
+    raise SystemExit(
+        f"GitOps overlay does not exist: {path}"
+    )
+
+lines = path.read_text(
+    encoding="utf-8"
+).splitlines()
+
+current_image = None
+backend_updated = False
+frontend_updated = False
+updated_lines = []
+
+for line in lines:
+    stripped = line.strip()
+
+    if stripped == "- name: platform-launchpad-backend":
+        current_image = "backend"
+
+    elif stripped == "- name: platform-launchpad-frontend":
+        current_image = "frontend"
+
+    if stripped.startswith("digest:"):
+        indentation = line[
+            : len(line) - len(line.lstrip())
+        ]
+
+        if current_image == "backend":
+            line = (
+                f"{indentation}digest: "
+                f"{backend_digest}"
+            )
+            backend_updated = True
+
+        elif current_image == "frontend":
+            line = (
+                f"{indentation}digest: "
+                f"{frontend_digest}"
+            )
+            frontend_updated = True
+
+    updated_lines.append(line)
+
+if not backend_updated:
+    raise SystemExit(
+        "Backend image digest mapping was not found."
+    )
+
+if not frontend_updated:
+    raise SystemExit(
+        "Frontend image digest mapping was not found."
+    )
+
+path.write_text(
+    "\\n".join(updated_lines) + "\\n",
+    encoding="utf-8",
+)
+PY
+
+                        echo "Updated GitOps image mappings:"
+
+                        grep -A3 \
+                            'name: platform-launchpad-' \
+                            "${GITOPS_OVERLAY}"
+
+                        kubectl kustomize \
+                            overlays/development \
+                            > /tmp/platform-launchpad-development.yaml
+
+                        echo "Rendered deployment images:"
+
+                        grep 'image:' \
+                            /tmp/platform-launchpad-development.yaml
+
+                        if grep -Eq \
+                            'REPLACE_(BACKEND|FRONTEND)_DIGEST' \
+                            /tmp/platform-launchpad-development.yaml
+                        then
+                            echo "Placeholder image digest remains."
+                            exit 1
+                        fi
+
+                        BACKEND_RENDER_COUNT="$(
+                            grep -c \
+                                "@${BACKEND_DIGEST}" \
+                                /tmp/platform-launchpad-development.yaml
+                        )"
+
+                        FRONTEND_RENDER_COUNT="$(
+                            grep -c \
+                                "@${FRONTEND_DIGEST}" \
+                                /tmp/platform-launchpad-development.yaml
+                        )"
+
+                        if [ "${BACKEND_RENDER_COUNT}" -ne 2 ]
+                        then
+                            echo "Expected backend digest in two workloads."
+                            exit 1
+                        fi
+
+                        if [ "${FRONTEND_RENDER_COUNT}" -ne 1 ]
+                        then
+                            echo "Expected frontend digest in one workload."
+                            exit 1
+                        fi
+
+                        git diff --check
+
+                        if git diff --quiet
+                        then
+                            echo "GitOps desired state already matches these digests."
+                            exit 0
+                        fi
+
+                        git config \
+                            user.name \
+                            "Platform Launchpad Jenkins"
+
+                        git config \
+                            user.email \
+                            "platform-launchpad-jenkins@users.noreply.github.com"
+
+                        git add "${GITOPS_OVERLAY}"
+
+                        git diff \
+                            --cached \
+                            --check
+
+                        git commit \
+                            -m "deploy(development): promote ${GIT_COMMIT_SHORT}"
+
+                        git push \
+                            origin \
+                            "${GITOPS_BRANCH}"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "CI validation completed successfully for ${env.GIT_COMMIT_SHORT}."
+        }
+
+        failure {
+            echo "CI validation failed."
+        }
+
+        always {
+            echo "Jenkins build ${env.BUILD_NUMBER} finished."
+
+            archiveArtifacts(
+                artifacts: '*-image-reference.txt,*-image-digest.txt',
+                allowEmptyArchive: true
+            )
+        }
+    }
+}
