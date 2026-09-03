@@ -175,6 +175,40 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# -------------------------------------------------------------------
+# NAT Gateway
+# -------------------------------------------------------------------
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-nat-eip"
+      Tier = "public"
+    }
+  )
+}
+
+
+resource "aws_nat_gateway" "this" {
+  allocation_id = aws_eip.nat.id
+
+  subnet_id = aws_subnet.public[0].id
+
+  depends_on = [
+    aws_internet_gateway.this,
+  ]
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-nat"
+      Tier = "public"
+    }
+  )
+}
 
 # -------------------------------------------------------------------
 # Private Application Route Table
@@ -200,6 +234,13 @@ resource "aws_route_table_association" "private_app" {
   route_table_id = aws_route_table.private_app.id
 }
 
+resource "aws_route" "private_app_internet" {
+  route_table_id = aws_route_table.private_app.id
+
+  destination_cidr_block = "0.0.0.0/0"
+
+  nat_gateway_id = aws_nat_gateway.this.id
+}
 
 # -------------------------------------------------------------------
 # Private Database Route Table

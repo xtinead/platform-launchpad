@@ -52,3 +52,13 @@ output "availability_zones" {
   description = "Availability zones used by the networking module."
   value       = var.availability_zones
 }
+
+output "nat_gateway_id" {
+  description = "ID of the NAT Gateway used by private application subnets."
+  value       = aws_nat_gateway.this.id
+}
+
+output "nat_gateway_public_ip" {
+  description = "Public IPv4 address assigned to the NAT Gateway."
+  value       = aws_eip.nat.public_ip
+}
