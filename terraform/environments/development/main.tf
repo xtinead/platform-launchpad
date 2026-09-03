@@ -170,9 +170,9 @@ module "eks" {
 
   node_capacity_type = "ON_DEMAND"
 
-  node_desired_size = 1
-  node_min_size     = 1
-  node_max_size     = 2
+  node_desired_size = 2
+  node_min_size     = 2
+  node_max_size     = 3
 
   node_disk_size = 20
 
@@ -238,6 +238,13 @@ module "load_balancer_controller_iam" {
 
 module "controller_ecr" {
   source = "../../modules/controller-ecr"
+
+  project_name = var.project_name
+  environment  = var.environment
+}
+
+module "argocd_ecr" {
+  source = "../../modules/argocd-ecr"
 
   project_name = var.project_name
   environment  = var.environment

@@ -299,3 +299,23 @@ output "ci_delivery_assume_role_policy_arn" {
     module.ci_delivery_iam.jenkins_assume_role_policy_arn
   )
 }
+
+output "nat_gateway_id" {
+  description = "ID of the NAT Gateway used by private application subnets."
+  value       = module.networking.nat_gateway_id
+}
+
+output "nat_gateway_public_ip" {
+  description = "Public IPv4 address assigned to the NAT Gateway."
+  value       = module.networking.nat_gateway_public_ip
+}
+
+output "argocd_repository_names" {
+  description = "Argo CD bootstrap ECR repository names."
+  value       = module.argocd_ecr.repository_names
+}
+
+output "argocd_repository_urls" {
+  description = "Argo CD bootstrap ECR repository URLs."
+  value       = module.argocd_ecr.repository_urls
+}
