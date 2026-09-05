@@ -2,43 +2,73 @@
 
 ## 1. Purpose
 
-This document defines the security architecture, trust boundaries, threats, controls, and responsibilities for Platform Launchpad.
+This document defines the security architecture and implemented security
+controls for Platform Launchpad.
 
-Platform Launchpad is a production-style Internal Developer Platform demonstration that includes:
+Platform Launchpad is a production-style platform engineering portfolio
+application deployed to AWS and Amazon EKS. Security is enforced across the
+application, CI/CD, infrastructure, Kubernetes, GitOps, data, identity, and
+network layers.
 
-- A Next.js frontend
-- A FastAPI backend
-- PostgreSQL
-- Redis
-- A Python worker
-- Jenkins
-- Amazon ECR
-- Amazon EKS
-- Argo CD
-- Terraform-managed AWS infrastructure
-- Prometheus, Grafana, logs, and traces
+The security model is based on the following principles:
 
-The security model applies to local development, the low-cost portfolio deployment, and the production-style AWS deployment.
+- least privilege;
+- defense in depth;
+- explicit trust boundaries;
+- private-by-default infrastructure;
+- secrets outside source control;
+- immutable application delivery;
+- separation of CI and CD responsibilities;
+- declarative infrastructure and runtime state;
+- auditable administrative and deployment activity;
+- reproducible recovery;
+- controlled exposure of public services.
+
+This document describes both application-level security requirements and the
+security controls implemented in the AWS development environment.
 
 ---
 
-## 2. Security Objectives
+## 2. Current Security Posture
 
-Platform Launchpad must:
+The development environment has been deployed and validated on AWS.
 
-- Authenticate users securely.
-- Enforce authorization in the backend.
-- Prevent users from accessing environments they do not own.
-- Restrict administrative operations to administrators.
-- Protect passwords, tokens, credentials, and secrets.
-- Minimize privileges assigned to applications and automation.
-- Preserve audit history for security-sensitive actions.
-- Prevent CI systems from becoming unrestricted deployment administrators.
-- Protect PostgreSQL and Redis from public access.
-- Use encrypted communication in hosted environments.
-- Prevent sensitive information from entering logs or Git.
-- Detect and expose meaningful failures without disclosing internal details.
-- Support secure teardown and rebuild through infrastructure as code.
+Implemented security controls include:
+
+- application workloads running on Amazon EKS;
+- application workloads placed in private subnets;
+- Amazon RDS deployed without public accessibility;
+- Redis deployed within private networking;
+- AWS Secrets Manager used as the authoritative runtime secret store;
+- Secrets Store CSI Driver used to mount application secrets into Kubernetes;
+- EKS Pod Identity used for workload access to AWS services;
+- dedicated Kubernetes service accounts;
+- private Amazon ECR repositories;
+- immutable application image digests in GitOps manifests;
+- non-root application containers;
+- privilege escalation disabled;
+- Linux capabilities dropped where supported;
+- read-only root filesystems where supported;
+- Kubernetes readiness and liveness probes;
+- AWS Application Load Balancer ingress;
+- AWS Certificate Manager TLS certificate;
+- HTTP-to-HTTPS redirection;
+- AWS Load Balancer Controller using least-privilege AWS identity;
+- Jenkins separated from Kubernetes runtime reconciliation;
+- Argo CD acting as the Kubernetes reconciliation authority;
+- Terraform acting as the AWS infrastructure provisioning authority;
+- remote Terraform state protection;
+- private Argo CD bootstrap image mirrors in ECR;
+- pinned Argo CD bootstrap component versions;
+- database migrations executed as an Argo CD Sync hook;
+- infrastructure drift validation through Terraform;
+- GitOps reconciliation validation through Argo CD.
+
+The development environment is intentionally temporary and can be destroyed
+after validation to reduce cloud cost. Security-sensitive state required for
+reconstruction is represented through Terraform, Git, GitOps configuration,
+and approved secret-management mechanisms rather than through undocumented
+manual configuration.
 
 ---
 
@@ -46,393 +76,342 @@ Platform Launchpad must:
 
 ### 3.1 Least Privilege
 
-Every user, workload, pipeline, and cloud identity receives only the permissions required for its responsibilities.
+Every identity receives only the permissions required for its responsibility.
+
+This applies to:
+
+- application users;
+- administrators;
+- Jenkins;
+- Terraform;
+- EKS nodes;
+- Kubernetes service accounts;
+- application workloads;
+- AWS Load Balancer Controller;
+- Argo CD;
+- database identities.
+
+Broad administrative permissions are not considered an acceptable steady-state
+runtime configuration.
 
 ### 3.2 Defense in Depth
 
-Security does not depend on one control.
+No single control is treated as sufficient.
 
-Controls exist across:
+Security boundaries are implemented across:
 
-- Browser and frontend
-- Backend API
-- Database
-- Worker
-- CI/CD
-- GitOps
-- Kubernetes
-- AWS networking and IAM
-- Monitoring and audit logging
+```text
+Browser
+   |
+   v
+HTTPS / ALB
+   |
+   v
+Kubernetes Ingress
+   |
+   v
+Frontend
+   |
+   v
+Backend Authorization
+   |
+   +------> PostgreSQL
+   |
+   +------> Runtime AWS Services
 
-### 3.3 Backend Authorization Is Authoritative
+GitHub
+   |
+   v
+Jenkins
+   |
+   +------> Private ECR
+   |
+   +------> GitOps Repository
+                  |
+                  v
+               Argo CD
+                  |
+                  v
+              Kubernetes
+```
 
-Frontend role checks improve the user experience but do not provide security.
+Application authorization, AWS IAM, Kubernetes RBAC, security groups, private
+networking, secret management, and Git review all contribute independent
+controls.
 
-FastAPI must independently validate:
+### 3.3 Secure Defaults
 
-- Authentication
-- User status
-- User role
-- Environment ownership
-- Valid state transitions
+Resources should be private unless public exposure is explicitly required.
+
+Examples include:
+
+- RDS is private;
+- Redis is private;
+- EKS application workloads use private subnets;
+- public traffic enters through the ALB;
+- secrets are stored outside Git;
+- AWS access uses roles and workload identity;
+- runtime containers avoid privileged execution.
 
 ### 3.4 Secrets Never Enter Source Control
 
-The repository must not contain:
+The following must never be committed:
 
-- Passwords
-- JWT signing secrets
-- AWS access keys
-- Database credentials
-- Redis credentials
-- Private keys
-- GitHub tokens
-- Jenkins credentials
-- Kubernetes credentials
-- TLS private keys
+- passwords;
+- JWT signing secrets;
+- database credentials;
+- Redis credentials;
+- AWS access keys;
+- GitHub tokens;
+- Jenkins credentials;
+- Argo CD administrative credentials;
+- Kubernetes credentials;
+- TLS private keys;
+- Terraform state containing sensitive values.
 
-### 3.5 Git Is the Runtime Source of Truth
+Safe placeholders may be committed where documentation requires examples.
 
-Kubernetes deployment state is managed through Git and Argo CD.
+### 3.5 GitOps Is the Runtime Deployment Authority
 
-Jenkins must not require unrestricted `kubectl` access to application clusters.
+Kubernetes application state is managed through Git and Argo CD.
 
-### 3.6 Security Events Must Be Auditable
+Jenkins does not require unrestricted Kubernetes deployment access.
 
-Authentication activity, administrative changes, access denials, and environment lifecycle operations must produce safe, structured records.
+This separation reduces the blast radius of a compromised CI system and
+preserves an auditable deployment history.
 
-### 3.7 Fail Securely
+### 3.6 Terraform Is the Infrastructure Authority
 
-When identity, ownership, role, dependency, or lifecycle state cannot be verified, the operation must be denied.
+Terraform is authoritative for the AWS infrastructure represented in the
+development environment.
+
+Infrastructure changes should be:
+
+1. represented in Terraform;
+2. reviewed;
+3. planned;
+4. applied deliberately;
+5. validated for drift.
+
+Manual infrastructure changes should not become undocumented persistent state.
 
 ---
 
-## 4. Assets
+## 4. Security Assets
 
-The primary assets requiring protection are:
+Assets requiring protection include:
+
+### Identity Data
+
+- user accounts;
+- password hashes;
+- roles;
+- account status;
+- authentication state.
 
 ### Application Data
 
-- User identities
-- Email addresses
-- Password hashes
-- Environment records
-- Deployment requests
-- Audit records
-- Platform metadata
+- environment records;
+- deployment requests;
+- audit records;
+- lifecycle history.
 
 ### Credentials and Secrets
 
-- JWT signing secret
-- PostgreSQL credentials
-- Redis credentials
-- AWS credentials
-- IAM role trust relationships
-- GitHub credentials
-- Jenkins credentials
-- Argo CD credentials
-- TLS private keys
+- JWT signing secret;
+- PostgreSQL credentials;
+- Redis credentials where applicable;
+- AWS IAM trust relationships;
+- Jenkins credentials;
+- GitHub credentials;
+- Argo CD credentials;
+- TLS private keys.
 
-### Platform Resources
+### Infrastructure
 
-- AWS account
-- VPC
-- EKS cluster
-- RDS database
-- ECR repositories
-- Route 53 records
-- ACM certificates
-- Terraform state
-- Kubernetes namespaces and workloads
+- EKS cluster;
+- RDS database;
+- Redis;
+- ECR repositories;
+- VPC;
+- subnets;
+- security groups;
+- Route 53 records;
+- ACM certificates;
+- Terraform state;
+- Kubernetes namespaces and workloads.
 
-### Software Supply Chain
+### Delivery Systems
 
-- Application source code
-- Dependency manifests
-- Dockerfiles
-- Container images
-- Jenkins pipelines
-- Terraform code
-- Kubernetes manifests
-- GitOps overlays
+- application repository;
+- GitOps repository;
+- Jenkins pipeline;
+- Argo CD;
+- Terraform configuration.
 
 ---
 
 ## 5. Trust Boundaries
 
-```mermaid
-flowchart LR
-    USER[User Browser]
-    FRONTEND[Next.js Frontend]
-    API[FastAPI API]
-    DB[(PostgreSQL)]
-    REDIS[(Redis)]
-    WORKER[Python Worker]
+Primary trust boundaries are:
 
-    GITHUB[GitHub]
-    JENKINS[Jenkins]
-    ECR[Amazon ECR]
-    GITOPS[GitOps Repository]
-    ARGO[Argo CD]
-    EKS[Amazon EKS]
-    AWS[AWS Services]
+1. Browser to public ALB
+2. ALB to Kubernetes workloads
+3. Frontend to backend API
+4. Backend to PostgreSQL
+5. Application workloads to AWS services
+6. Jenkins to AWS
+7. Jenkins to GitHub
+8. Argo CD to GitHub
+9. Argo CD to Kubernetes API
+10. Kubernetes workloads to AWS through EKS Pod Identity
+11. Terraform operator or automation to AWS APIs
+12. AWS Secrets Manager to Kubernetes through the CSI integration
 
-    USER -->|HTTPS| FRONTEND
-    FRONTEND -->|HTTPS and JWT| API
-    API -->|TLS and DB Credentials| DB
-    API -->|Authenticated Connection| REDIS
-    REDIS --> WORKER
-    WORKER --> DB
-
-    GITHUB --> JENKINS
-    JENKINS --> ECR
-    JENKINS --> GITOPS
-    GITOPS --> ARGO
-    ARGO --> EKS
-    EKS --> AWS
-```
-
-Primary trust boundaries:
-
-1. Public browser to frontend
-2. Frontend to backend API
-3. Backend to PostgreSQL
-4. Backend and worker to Redis
-5. Jenkins to GitHub and AWS
-6. Argo CD to the Kubernetes API
-7. Kubernetes workloads to AWS services
-8. Terraform runner to AWS
-9. Operators to administrative interfaces
+Each boundary requires explicit authentication, authorization, network
+restriction, or cryptographic protection appropriate to the interaction.
 
 ---
 
-## 6. Authentication Model
+## 6. Authentication
 
-### 6.1 MVP Authentication
-
-The MVP uses application-managed authentication with:
-
-- Email
-- Password
-- JWT access token
-
-Registration always creates the `user` role.
-
-Clients cannot assign themselves administrative privileges.
-
-### 6.2 Password Storage
+Platform Launchpad uses application authentication to establish user identity.
 
 Passwords must:
 
-- Never be stored in plaintext
-- Never be logged
-- Never be returned by the API
-- Never be included in audit records
-- Be hashed using a password-specific hashing algorithm
-- Use a unique salt managed by the hashing implementation
+- never be stored in plaintext;
+- be processed through a maintained password-hashing implementation;
+- never be logged;
+- never appear in audit records;
+- never be returned by the API.
 
-The initial implementation will use a maintained password-hashing library.
+Authentication responses must avoid leaking whether sensitive internal state
+exists.
 
-### 6.3 Password Policy
+The application must reject disabled users.
 
-Passwords require:
+Future production hardening may include:
 
-- Minimum 12 characters
-- Maximum 128 characters
-- At least one uppercase letter
-- At least one lowercase letter
-- At least one number
-- At least one special character
-
-Password policy validation does not replace secure hashing.
-
-### 6.4 Login Behavior
-
-Login failures return a generic response.
-
-The API must not reveal whether:
-
-- The email exists
-- The password was incorrect
-- The account exists but has never logged in
-
-Disabled accounts receive an access-denied response after credentials are validated.
-
-### 6.5 Future Identity Improvements
-
-Future releases may introduce:
-
-- Refresh tokens
-- Token revocation
-- Password reset
-- Email verification
-- Multifactor authentication
-- Enterprise SSO
-- OIDC
-- Short-lived federated sessions
+- MFA;
+- refresh-token rotation;
+- centralized identity federation;
+- stronger session revocation.
 
 ---
 
 ## 7. JWT Security
 
-JWT access tokens must include:
+JWTs are treated as credentials.
 
-- Subject user ID
-- Role
-- Token type
-- Issued-at time
-- Expiration time
+Requirements include:
 
-Example:
+- signing secrets remain outside source control;
+- short-lived access tokens;
+- HTTPS-only transmission in hosted environments;
+- tokens are not logged;
+- tokens are not placed in URLs;
+- authorization decisions are performed server-side;
+- disabled users cannot continue using previously issued credentials where
+  application validation supports account-state enforcement.
 
-```json
-{
-  "sub": "7ce8938a-4055-439b-b941-794682a72463",
-  "role": "user",
-  "type": "access",
-  "iat": 1783700000,
-  "exp": 1783703600
-}
-```
-
-Requirements:
-
-- Tokens must have a short expiration period.
-- The signing secret must not be committed to Git.
-- The backend must explicitly validate the expected algorithm.
-- The backend must validate expiration.
-- The backend must validate token type.
-- The backend must load the current user from PostgreSQL.
-- Disabled users must be denied even if their token has not expired.
-- Sensitive data must not be stored in token claims.
-- Tokens must never be written to application logs.
-
-The token role claim may improve request processing, but current authorization should be based on trusted application data where practical.
+Future iterations may introduce asymmetric signing, refresh-token rotation, or
+external identity providers.
 
 ---
 
-## 8. Token Storage
+## 8. Authorization
 
-The frontend must avoid exposing tokens unnecessarily.
+The FastAPI backend is the authoritative application authorization boundary.
 
-The initial implementation must document its chosen storage mechanism and its risks.
+Authorization decisions must not rely on:
 
-Preferred production direction:
+- frontend visibility;
+- browser state;
+- hidden fields;
+- client-supplied role values;
+- client-supplied ownership values.
 
-- Secure
-- HTTP-only
-- SameSite-protected cookies
-- HTTPS-only transmission
-
-A browser-readable token may be used temporarily during early development, but this must be treated as a known risk and reviewed before public deployment.
-
-The application must not store access tokens in:
-
-- Source code
-- Build-time public environment variables
-- Logs
-- Analytics events
-- URLs
-- Audit records
+Role and ownership checks are enforced by backend dependencies and application
+logic.
 
 ---
 
-## 9. Authorization Model
+## 9. Role-Based Access Control
 
-Platform Launchpad supports:
+Platform Launchpad supports role-aware application behavior.
 
-- `user`
-- `admin`
+Regular users may perform authorized actions against resources they own.
 
-### Regular User
+Administrative capabilities may include:
 
-A regular user may:
-
-- Read their own profile
-- Create environments
-- List their own environments
-- Read their own environments
-- View related deployment requests
-- Request destruction of their own environments
-
-### Administrator
-
-An administrator may:
-
-- View all users
-- Enable or disable users
-- View all environments
-- Review failed deployment requests
-- Retry supported requests
-- Review audit logs
-- Perform controlled status overrides
+- viewing users;
+- enabling or disabling users;
+- viewing environments;
+- reviewing failed deployment requests;
+- retrying supported requests;
+- reviewing audit logs;
+- performing controlled status overrides.
 
 ### Ownership Enforcement
 
-For environment-scoped operations, the backend must verify:
+For environment-scoped operations, the backend verifies the equivalent of:
 
 ```text
 environment.owner_id == current_user.id
 ```
 
-or:
+or administrative authorization.
 
-```text
-current_user.role == admin
-```
-
-The frontend must never provide `owner_id` as an authoritative creation field.
-
-Ownership is derived from the authenticated user.
+The frontend is not authoritative for ownership.
 
 ### Resource Concealment
 
-For protected resources, the API may return `404 Not Found` instead of `403 Forbidden` to reduce resource enumeration.
+Protected resources may return `404 Not Found` instead of `403 Forbidden`
+where concealment reduces resource enumeration.
 
 ---
 
 ## 10. Account Security
 
-Users have an `is_active` state.
+Users have an active/inactive lifecycle state.
 
 Disabled users must be prevented from:
 
-- Logging in
-- Using previously issued access tokens
-- Creating environments
-- Destroying environments
-- Accessing authenticated routes
+- authenticating;
+- using protected application functionality;
+- creating environments;
+- destroying environments;
+- performing authenticated lifecycle operations.
 
-User records with operational history are deactivated rather than physically deleted in the MVP.
+Historical user records should be deactivated rather than physically removed
+when deletion would break operational or audit history.
 
-Administrative enable and disable actions must create audit records.
+Administrative account-state changes should create audit events.
 
 ---
 
 ## 11. Input Validation
 
-The backend validates all external input.
+All externally supplied values are untrusted.
 
 Validation includes:
 
-- Email format
-- String length
-- UUID format
-- Enum values
-- Environment name pattern
-- Pagination limits
-- Supported status transitions
-- Supported environment types
-- Supported deployment operations
+- email format;
+- string lengths;
+- UUID format;
+- enum values;
+- environment-name format;
+- pagination limits;
+- supported lifecycle states;
+- supported deployment operations.
 
 The backend must not trust:
 
-- Frontend validation
-- Hidden fields
-- Browser role state
-- User-provided owner IDs
-- User-provided administrative flags
-- User-provided lifecycle status
+- frontend validation;
+- hidden browser fields;
+- user-provided administrative flags;
+- user-provided owner IDs;
+- user-provided lifecycle status.
 
 Unknown fields should be rejected where practical.
 
@@ -440,282 +419,262 @@ Unknown fields should be rejected where practical.
 
 ## 12. Environment Name Security
 
-Environment names may eventually influence:
+Environment names may influence:
 
-- Kubernetes namespaces
-- DNS names
-- GitOps paths
-- Resource labels
-- Cloud tags
+- Kubernetes resources;
+- DNS names;
+- GitOps paths;
+- labels;
+- cloud tags.
 
-Names must be constrained to a safe pattern.
-
-Initial rule:
+Names must therefore use a constrained format such as:
 
 ```text
 ^[a-z0-9][a-z0-9-]*[a-z0-9]$
 ```
 
-Names must not be passed directly into shell commands.
+User input must not be interpolated directly into unrestricted shell commands.
 
-Infrastructure integrations must use structured SDKs, templates, or safely parameterized execution.
+Infrastructure integrations should use structured APIs, declarative
+configuration, or safely parameterized execution.
 
 ---
 
-## 13. API Security Controls
+## 13. API Security
 
-The FastAPI backend must provide:
+The FastAPI backend provides the principal application security boundary.
 
-- Authentication dependencies
-- Role-checking dependencies
-- Ownership checks
-- Request validation
-- Safe error envelopes
-- Correlation IDs
-- Controlled CORS configuration
-- Security headers
-- Request-size limits
-- Rate limiting before public release
-- Structured logging
-- Dependency health checks
+Controls include or should include:
+
+- authentication dependencies;
+- authorization dependencies;
+- ownership enforcement;
+- request validation;
+- safe errors;
+- correlation identifiers;
+- controlled CORS;
+- structured logging;
+- health checks.
+
+Public production hardening should additionally include appropriately tuned:
+
+- rate limits;
+- request-size controls;
+- comprehensive response security headers.
 
 The API must not expose:
 
-- Stack traces
-- Raw database errors
-- Internal paths
-- Credential values
-- Signing secrets
-- SQL statements containing sensitive values
+- stack traces;
+- raw database errors;
+- credential values;
+- signing secrets;
+- sensitive SQL data;
+- internal implementation details unnecessarily.
 
 ---
 
-## 14. Cross-Origin Resource Sharing
+## 14. CORS
 
-CORS must use an explicit allowlist.
+CORS uses an explicit allowlist appropriate to the environment.
 
-Development may permit:
+Local development may permit:
 
 ```text
 http://localhost:3000
 ```
 
-Hosted environments must list only approved frontend origins.
+Hosted environments should permit only approved application origins.
 
-The API must not use unrestricted origins with credentialed browser requests.
-
-Allowed methods and headers should be limited to what the frontend requires.
+Credentialed browser requests must not rely on unrestricted wildcard origins.
 
 ---
 
 ## 15. CSRF Considerations
 
-JWT bearer tokens sent through the `Authorization` header are less directly exposed to traditional cookie-based CSRF attacks but introduce browser-storage risk.
+Bearer tokens transmitted through the `Authorization` header reduce exposure
+to traditional cookie-based CSRF patterns but introduce token-storage
+considerations.
 
-If authentication moves to cookies, the platform must add:
+If browser authentication moves to cookies, additional controls should include:
 
-- SameSite cookie controls
-- Secure cookies
-- CSRF token validation where required
-- Origin or referer validation for state-changing requests
-
-The final browser authentication design must be reviewed before public deployment.
+- `SameSite`;
+- `Secure`;
+- CSRF validation where required;
+- origin validation for state-changing requests.
 
 ---
 
 ## 16. Rate Limiting
 
-Rate limiting is required before public release.
+Rate limiting is an additional public-production hardening requirement.
 
-Priority endpoints:
+High-value targets include:
 
-- Registration
-- Login
-- Environment creation
-- Environment destruction
-- Administrative retry
-- Administrative status override
+- registration;
+- login;
+- environment creation;
+- destructive lifecycle operations;
+- administrative retries;
+- administrative overrides.
 
-Rate limiting should consider:
-
-- Source IP
-- User identity
-- Endpoint sensitivity
-- Burst limits
-- Sustained limits
-
-Authentication failures should not allow unlimited password guessing.
+Limits should consider both identity and source characteristics.
 
 ---
 
-## 17. Database Security
+## 17. PostgreSQL and RDS Security
 
-### Local Development
+The AWS environment uses Amazon RDS as the application system of record.
 
-PostgreSQL runs through Docker Compose.
+Implemented infrastructure controls include:
 
-Requirements:
+- private database networking;
+- no public RDS exposure;
+- security-group-controlled access;
+- encrypted storage;
+- credentials stored through AWS Secrets Manager;
+- application access from authorized workloads.
 
-- Development credentials remain in an ignored `.env` file.
-- The database port is used only for local development.
-- Default credentials must not be reused in hosted environments.
-- PostgreSQL data volumes must not be committed.
+The application database identity should not be a PostgreSQL superuser.
 
-### AWS Deployment
+Database secrets must not appear in:
 
-Amazon RDS must:
+- Git;
+- GitOps manifests;
+- container images;
+- application logs;
+- Jenkinsfiles.
 
-- Run in private subnets
-- Not be publicly accessible
-- Accept traffic only from authorized application security groups
-- Encrypt storage
-- Use encrypted connections
-- Enable automated backups
-- Use strong credentials
-- Store credentials in AWS Secrets Manager
-- Restrict administrative access
+Database migrations are executed through a controlled Argo CD Sync hook rather
+than through ad hoc manual execution against the cluster.
 
-### Application Database Identity
-
-The application database user must not be a PostgreSQL superuser.
-
-Separate roles may eventually be used for:
-
-- Schema migrations
-- Runtime application access
-- Read-only reporting
+Migration workloads use the same security principles as application workloads,
+including controlled identity, secret access, and hardened container settings.
 
 ---
 
 ## 18. Redis Security
 
-Redis must not be publicly accessible.
+Redis is deployed as a private platform data service and is not publicly
+exposed.
 
-Requirements:
+The current Platform Launchpad worker implementation uses **database-backed
+polling for deployment requests**. Redis is therefore not the authoritative
+deployment-request queue in the current architecture.
 
-- Run on an internal Docker network locally
-- Run in private networking in hosted environments
-- Require authentication where supported
-- Use encryption in transit for production deployments
-- Avoid placing secrets in task payloads
-- Restrict task payloads to required operation data
-- Apply expiration to temporary values
+Redis remains available for bounded transient capabilities where appropriate.
 
-Redis must not become the permanent source of truth.
+Security requirements include:
+
+- private networking;
+- restricted security-group access;
+- authentication where configured;
+- encrypted transport where required by the target environment;
+- no permanent authoritative application state;
+- no secrets embedded in transient payloads.
 
 ---
 
 ## 19. Worker Security
 
-The worker processes long-running lifecycle operations.
+The deployment worker processes persisted deployment requests using the
+application database-backed polling model.
 
-Requirements:
+The worker must:
 
-- Consume only trusted queue messages
-- Validate the referenced user, environment, and request
-- Verify that the deployment request is still eligible for processing
-- Avoid arbitrary shell execution
-- Use idempotent operations
-- Sanitize failure messages
-- Avoid storing credentials in task payloads
-- Use least-privilege platform identities
-- Record lifecycle events
+- process only valid persisted deployment requests;
+- validate referenced environments and operations;
+- enforce valid lifecycle transitions;
+- use idempotent processing behavior;
+- avoid unrestricted shell execution;
+- sanitize failures;
+- avoid logging secrets;
+- use least-privilege AWS identity when AWS access is required;
+- preserve lifecycle and audit information.
 
-The worker must not accept unrestricted Terraform code or shell commands submitted by application users.
+Application users must never be able to submit arbitrary Terraform,
+Kubernetes, or shell programs for worker execution.
 
 ---
 
 ## 20. Audit Logging
 
-Audit events include:
+Security-relevant events should produce audit records.
 
-- User registration
-- Successful login
-- Failed login
-- Account disabled or enabled
-- Environment creation
-- Provisioning started
-- Provisioning succeeded
-- Provisioning failed
-- Destruction requested
-- Destruction completed
-- Administrative retry
-- Administrative status override
-- Permission denial where useful
+Examples include:
+
+- registration;
+- successful authentication;
+- failed authentication;
+- account enable/disable;
+- environment creation;
+- lifecycle requests;
+- provisioning success/failure;
+- destruction;
+- administrative retry;
+- administrative overrides;
+- significant authorization failures.
 
 Audit records must not contain:
 
-- Passwords
-- Password hashes
-- JWTs
-- AWS access keys
-- Database passwords
-- Private keys
-- Complete connection strings
-- Secret values
+- passwords;
+- password hashes;
+- JWTs;
+- AWS credentials;
+- database passwords;
+- private keys;
+- secret values;
+- complete sensitive connection strings.
 
-Audit logs are append-oriented and read-only through the application API.
+Audit records are append-oriented operational evidence.
 
 ---
 
 ## 21. Application Logging
 
-Application logs should be structured.
+Application logs should be structured and operationally useful.
 
-Recommended fields:
+Useful fields include:
 
-- Timestamp
-- Log level
-- Service name
-- Environment
-- Request ID
-- Trace ID
-- User ID where appropriate
-- Route
-- HTTP method
-- Status code
-- Duration
-- Deployment request ID
-- Environment ID
+- timestamp;
+- severity;
+- service;
+- environment;
+- request ID;
+- trace ID;
+- route;
+- method;
+- status;
+- duration;
+- deployment-request ID;
+- environment ID.
 
-Logs must not contain:
+Logs must exclude:
 
-- Authorization headers
-- Cookies containing credentials
-- Password fields
-- JWT contents
-- Secret values
-- Raw sensitive request bodies
+- authorization headers;
+- credential cookies;
+- passwords;
+- JWT contents;
+- secret values;
+- sensitive request bodies.
 
 ---
 
 ## 22. Error Handling
 
-Client-facing errors must be safe and consistent.
-
-Example:
-
-```json
-{
-  "error": {
-    "code": "permission_denied",
-    "message": "You do not have permission to perform this operation.",
-    "details": {},
-    "request_id": "req_8c071f3102a24fbb"
-  }
-}
-```
-
-Internal errors should be logged with a correlation identifier.
+Client-facing errors must be safe and predictable.
 
 Production responses must not expose:
 
-- Python tracebacks
-- SQLAlchemy exceptions
-- SQL queries
-- Filesystem paths
-- Infrastructure credentials
-- Internal hostnames unless intentionally public
+- Python tracebacks;
+- SQLAlchemy internals;
+- filesystem paths;
+- AWS credentials;
+- database credentials;
+- secret values;
+- unnecessary internal infrastructure details.
+
+Detailed diagnostics belong in controlled server-side logs correlated through
+request or trace identifiers.
 
 ---
 
@@ -723,253 +682,410 @@ Production responses must not expose:
 
 The Next.js frontend must:
 
-- Avoid embedding secrets in client bundles
-- Treat all browser input as untrusted
-- Escape rendered content
-- Use framework-safe rendering defaults
-- Protect authenticated routes
-- Hide role-inappropriate navigation
-- Handle expired sessions
-- Avoid placing tokens in URLs
-- Use HTTPS in hosted environments
-- Use secure headers
-- Avoid unsafe HTML rendering
+- contain no server credentials in client bundles;
+- treat browser input as untrusted;
+- avoid unsafe HTML rendering;
+- protect authenticated navigation;
+- hide role-inappropriate controls;
+- handle expired authentication state;
+- avoid credentials in URLs;
+- operate over HTTPS in AWS;
+- use appropriate browser security headers.
 
-Frontend access checks do not replace backend authorization.
+Frontend authorization behavior is usability support, not the security
+boundary. Backend authorization remains authoritative.
 
 ---
 
-## 24. Security Headers
+## 24. HTTP Security Headers
 
-Hosted frontend and API responses should provide appropriate headers, including:
+Public frontend and API responses should use appropriate browser controls,
+including:
 
-- Content Security Policy
-- Strict Transport Security
-- X-Content-Type-Options
-- Referrer-Policy
-- Permissions-Policy
-- Frame restrictions
+- Content Security Policy;
+- Strict Transport Security;
+- X-Content-Type-Options;
+- Referrer-Policy;
+- Permissions-Policy;
+- framing restrictions.
 
-The exact Content Security Policy will be refined after frontend dependencies and external domains are known.
+The exact policy should be tested against actual frontend runtime requirements
+before strict enforcement.
 
 ---
 
 ## 25. Dependency Security
 
-Python and Node.js dependencies must be:
+Python, Node.js, container, Terraform, and Kubernetes dependencies should be:
 
-- Pinned or locked
-- Reviewed through pull requests
-- Scanned in CI
-- Updated deliberately
-- Removed when unused
+- pinned or locked where practical;
+- reviewed through source control;
+- scanned;
+- updated deliberately;
+- removed when unnecessary.
 
-The project should use:
+Pipeline security checks should include appropriate combinations of:
 
-- Python dependency scanning
-- Node dependency scanning
-- Container image scanning
-- Static analysis
-- Secret scanning
+- dependency scanning;
+- static analysis;
+- secret scanning;
+- container scanning;
+- infrastructure validation.
 
-Critical findings should block release unless a documented exception is approved.
+Critical findings should block promotion unless an explicit exception is
+documented.
 
 ---
 
 ## 26. Container Security
 
-Application container images must:
+Application images follow a hardened runtime model.
 
-- Use trusted base images
-- Use explicit version tags
-- Run as a non-root user where practical
-- Exclude development tools from runtime images
-- Exclude `.env` files
-- Exclude Git history
-- Use multi-stage builds where useful
-- Minimize installed packages
-- Include health checks where appropriate
-- Be scanned before publication
-- Be immutable after publication
+Controls include:
+
+- trusted base images;
+- explicit versions;
+- private ECR publication;
+- non-root execution;
+- minimized runtime packages;
+- multi-stage builds where appropriate;
+- exclusion of `.env`;
+- exclusion of Git metadata;
+- readiness and liveness probes;
+- immutable image digest references in GitOps;
+- container scanning as part of delivery controls.
+
+Kubernetes runtime security settings include where supported:
+
+```yaml
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
+runAsNonRoot: true
+capabilities:
+  drop:
+    - ALL
+```
 
 Images must not contain:
 
-- AWS credentials
-- Database credentials
-- Jenkins credentials
-- GitHub tokens
-- Kubernetes configuration files
-- Private keys
+- AWS credentials;
+- database credentials;
+- Jenkins credentials;
+- GitHub tokens;
+- kubeconfig files;
+- private keys.
 
 ---
 
-## 27. Jenkins Security
+## 27. Jenkins Security and CI/CD Separation
 
-Jenkins responsibilities include:
+Jenkins is the CI and artifact-publication system.
 
-- Checkout
-- Tests
-- Linting
-- Static analysis
-- Dependency scanning
-- Container build
-- Container scanning
-- ECR publishing
-- GitOps repository updates
+Its responsibilities include:
+
+- checkout;
+- tests;
+- linting;
+- static analysis;
+- dependency validation;
+- image build;
+- image scanning;
+- ECR publication;
+- controlled GitOps repository updates.
+
+Jenkins does **not** own runtime Kubernetes reconciliation.
+
+The delivery boundary is:
+
+```text
+Jenkins
+   |
+   +---- build/test/scan
+   |
+   +---- publish immutable image --> ECR
+   |
+   +---- update desired state ----> GitOps repository
+                                      |
+                                      v
+                                   Argo CD
+                                      |
+                                      v
+                                  Kubernetes
+```
 
 Jenkins must not:
 
-- Hold cluster-admin Kubernetes credentials
-- Deploy application workloads directly with unrestricted `kubectl`
-- Print secrets in logs
-- Store credentials in Jenkinsfiles
-- Use long-lived AWS user access keys when role-based access is available
+- hold unrestricted cluster-admin credentials;
+- deploy normal application workloads directly with unrestricted `kubectl`;
+- embed credentials in Jenkinsfiles;
+- expose credentials in build logs;
+- rely on long-lived IAM user keys when role-based access is available.
 
-Credentials must be stored through Jenkins credential management and injected only into the required stages.
-
-AWS access should use a least-privilege role.
+CI AWS permissions are separated through dedicated IAM configuration,
+including the CI delivery role and ECR publication permissions.
 
 ---
 
 ## 28. Software Supply-Chain Security
 
-The delivery pipeline should verify:
+The delivery process protects the transition from source code to running
+container.
 
-- Source repository identity
-- Approved branches
-- Pull-request review
-- Dependency manifests
-- Test results
-- Static analysis
-- Container scan results
-- Image digest
-- GitOps change
+Controls include:
 
-Future improvements may include:
+- controlled source repositories;
+- reviewed changes;
+- CI validation;
+- private ECR repositories;
+- immutable image digests;
+- Git-based desired state;
+- Argo CD reconciliation;
+- Terraform-managed infrastructure.
 
-- Image signing
-- Provenance attestations
-- SBOM generation
-- Policy verification
-- Admission controls
-- Protected build environments
+Future hardening may include:
+
+- SBOM generation;
+- image signing;
+- provenance attestations;
+- signature verification;
+- Kubernetes admission policies.
+
+These are future enhancements and are not represented as currently deployed
+controls.
 
 ---
 
 ## 29. GitHub Security
 
-Repositories should use:
+Source and GitOps repositories should use:
 
-- Protected `main`
-- Pull requests
-- Required reviews
-- Required CI checks
-- Restricted force pushes
-- Secret scanning
-- Dependency alerts
-- Least-privilege tokens
-- Branch deletion after merge
+- protected primary branches;
+- pull-request review;
+- required CI checks where appropriate;
+- restricted force pushes;
+- secret scanning;
+- dependency alerts;
+- least-privilege credentials.
 
-Sensitive changes such as IAM, CI/CD, authentication, and security policy updates should receive explicit review.
+Security-sensitive changes deserve explicit review, especially:
+
+- IAM;
+- authentication;
+- Terraform;
+- Jenkins;
+- Kubernetes security contexts;
+- GitOps configuration;
+- secrets integration.
+
+Git history provides an important part of the platform's deployment and
+configuration audit trail.
 
 ---
 
 ## 30. Terraform Security
 
-Terraform must:
+Terraform is the AWS infrastructure authority.
 
-- Use remote state
-- Encrypt state at rest
-- Protect the state bucket
-- Use DynamoDB locking where applicable
-- Restrict state access
-- Avoid outputting secrets
-- Avoid committing `.tfstate`
-- Avoid committing `.terraform`
-- Use least-privilege execution roles
-- Require review before applying production changes
+Controls include:
 
-Terraform state may contain sensitive values and must be treated as confidential.
+- remote state;
+- encrypted state storage;
+- restricted state access;
+- state locking;
+- no committed `.tfstate`;
+- no committed `.terraform` directory;
+- reviewed plans;
+- deliberate applies;
+- least-privilege AWS execution identities;
+- drift detection.
+
+Terraform state is confidential because providers and resources may record
+sensitive infrastructure metadata.
+
+The platform has also used `terraform import` where pre-existing AWS resources
+needed to be adopted into Terraform ownership rather than recreated.
+
+Import is an ownership transition mechanism, not a substitute for declarative
+configuration.
+
+A clean Terraform plan is used as evidence that represented infrastructure
+matches declared configuration.
 
 ---
 
-## 31. AWS IAM
+## 31. AWS IAM and EKS Pod Identity
 
-AWS access should use roles rather than long-lived IAM user keys.
+AWS access uses roles and workload identity rather than embedding long-lived
+AWS credentials into application containers.
 
-Planned identities include:
+The current EKS architecture uses **EKS Pod Identity** for supported workload
+access.
 
-- Terraform provisioning role
-- Jenkins build and ECR publishing role
-- EKS control-plane roles
-- Node roles
-- AWS Load Balancer Controller IRSA role
-- External Secrets or secret-access IRSA role
-- Application workload roles where required
+Implemented identity categories include:
 
-IAM policies must avoid broad permissions such as:
+- EKS cluster and node identities;
+- application runtime identity;
+- CI delivery identity;
+- AWS Load Balancer Controller identity;
+- secret-access permissions;
+- EKS Pod Identity associations;
+- ECR access permissions.
+
+The application runtime role is associated with the appropriate Kubernetes
+service account through EKS Pod Identity.
+
+This allows pods to receive temporary AWS credentials without storing static
+AWS access keys in:
+
+- Git;
+- Kubernetes manifests;
+- container images;
+- environment files;
+- Jenkins configuration.
+
+IAM policies should avoid:
 
 ```text
 Action: "*"
 Resource: "*"
 ```
 
-unless a narrowly justified bootstrap condition exists.
+except where an explicitly reviewed AWS API limitation or tightly bounded
+bootstrap requirement makes broader scope unavoidable.
+
+Earlier architecture concepts based primarily on IRSA have been superseded by
+the implemented EKS Pod Identity model for the current application workloads.
 
 ---
 
 ## 32. AWS Network Security
 
-The AWS architecture must use:
+The AWS network follows a layered public/private model.
 
-- Public subnets only for public load-balancing resources where required
-- Private subnets for EKS worker nodes
-- Private subnets for RDS
-- Restricted security groups
-- No public RDS endpoint
-- Controlled outbound access
-- TLS termination
-- Route 53 and ACM for trusted application endpoints
+Implemented controls include:
 
-Security groups should reference other security groups where practical rather than broad CIDR ranges.
+- VPC isolation;
+- public subnets for internet-facing infrastructure where required;
+- private application subnets;
+- private database subnets;
+- restricted security groups;
+- no public RDS endpoint;
+- controlled outbound access;
+- NAT-based private-subnet egress where required;
+- VPC endpoints for selected AWS services;
+- ALB-controlled public ingress.
+
+Traffic follows approximately:
+
+```text
+Internet
+   |
+   v
+Public ALB
+   |
+   v
+Private EKS Workloads
+   |
+   +------> Private RDS
+   |
+   +------> Private Redis
+   |
+   +------> AWS Services
+```
+
+Security groups should reference other security groups where practical rather
+than unnecessarily broad CIDR ranges.
+
+The NAT Gateway provides outbound connectivity and does not make private
+workloads directly internet-addressable.
 
 ---
 
 ## 33. Kubernetes Security
 
-Kubernetes workloads should use:
+Application workloads run in the dedicated:
 
-- Dedicated namespaces
-- Service accounts
-- Least-privilege RBAC
-- Resource requests and limits
-- Liveness and readiness probes
-- Non-root execution where practical
-- Read-only filesystems where practical
-- Dropped Linux capabilities
-- Restricted privilege escalation
-- Network policies where supported
-- External secret retrieval
-- Pod security controls
-- Immutable image references or controlled version tags
+```text
+platform-launchpad
+```
 
-Application workloads must not use the default service account unnecessarily.
+namespace.
+
+Platform dependencies use their appropriate namespaces, including:
+
+```text
+argocd
+kube-system
+```
+
+Workload controls include:
+
+- dedicated service accounts;
+- namespace separation;
+- readiness probes;
+- liveness probes;
+- resource requests and limits where configured;
+- non-root execution;
+- privilege escalation disabled;
+- Linux capabilities dropped;
+- read-only root filesystem where supported;
+- controlled secret mounts;
+- immutable image digest references;
+- AWS workload identity through EKS Pod Identity.
+
+Application workloads should not rely on the default service account when AWS
+or Kubernetes permissions require a dedicated identity.
+
+Future hardening may add more restrictive:
+
+- NetworkPolicy;
+- admission policy;
+- Pod Security Admission enforcement.
+
+These should not be described as implemented until validated in the deployed
+environment.
 
 ---
 
 ## 34. Argo CD Security
 
-Argo CD must:
+Argo CD is the Kubernetes runtime reconciliation authority.
 
-- Read approved GitOps repositories
-- Reconcile only authorized namespaces and resources
-- Use scoped projects
-- Restrict administrative access
-- Avoid exposing credentials in manifests
-- Use SSO or stronger authentication in later environments
-- Preserve an auditable Git deployment history
+It currently reconciles applications including:
 
-Argo CD credentials must not be committed to Git.
+```text
+platform-launchpad-development
+aws-load-balancer-controller-development
+```
+
+Security properties include:
+
+- desired state stored in Git;
+- deployment history preserved through Git commits;
+- runtime reconciliation separated from Jenkins;
+- approved repository configuration;
+- namespace-aware application destinations;
+- no plaintext runtime secrets committed to application manifests;
+- controlled bootstrap;
+- pinned bootstrap component versions;
+- private ECR mirrors for required Argo CD runtime images.
+
+The bootstrap process mirrors:
+
+- Argo CD;
+- Dex;
+- Redis
+
+into Terraform-managed private ECR repositories before installation.
+
+The downloaded pinned Argo CD installation manifest is rewritten to reference
+those private images and validated to ensure public runtime image references
+are not retained.
+
+Argo CD administrative credentials must never be committed to Git.
+
+For longer-lived or production environments, stronger administrative access
+controls such as enterprise SSO should be considered.
 
 ---
 
@@ -977,7 +1093,7 @@ Argo CD credentials must not be committed to Git.
 
 ### Local Development
 
-Use:
+Local development may use:
 
 ```text
 .env
@@ -985,300 +1101,608 @@ Use:
 
 Requirements:
 
-- `.env` is ignored by Git.
-- `.env.example` contains only safe placeholders.
-- Local credentials are development-only.
-- Secret rotation is not assumed for public deployment.
+- `.env` remains ignored by Git;
+- `.env.example` contains placeholders only;
+- development credentials are not reused as hosted credentials.
 
-### Hosted Portfolio Environment
+### AWS Development Environment
 
-Use the hosting platform's secret management.
+AWS Secrets Manager is the authoritative store for application runtime
+secrets.
 
-### AWS Environment
+Kubernetes integrates with Secrets Manager through the Secrets Store CSI
+Driver.
 
-Use AWS Secrets Manager or another approved AWS-native mechanism.
+The security flow is:
 
-Kubernetes manifests should reference secrets without embedding their plaintext values.
+```text
+AWS Secrets Manager
+        |
+        | IAM-authorized retrieval
+        v
+EKS Pod Identity
+        |
+        v
+Secrets Store CSI Driver
+        |
+        v
+Mounted Secret Files
+        |
+        v
+Application Workload
+```
+
+This design avoids storing plaintext runtime secret values directly in GitOps
+manifests.
+
+Access to secrets is controlled through the workload's AWS identity and IAM
+policy.
+
+Applications must not log mounted secret contents.
+
+Secret files should be readable only by the workload that requires them.
+
+Rotation procedures should account for whether a workload must restart or
+reload configuration after the underlying secret changes.
 
 ---
 
-## 36. TLS and Transport Security
+## 36. TLS and Public Ingress
 
-Hosted environments require HTTPS.
+Public Platform Launchpad traffic enters through an AWS Application Load
+Balancer managed through Kubernetes ingress resources and the AWS Load
+Balancer Controller.
 
-Requirements:
+The public application endpoint is:
 
-- Browser-to-frontend traffic uses HTTPS.
-- Frontend-to-API traffic uses HTTPS.
-- Public endpoints redirect HTTP to HTTPS.
-- TLS certificates use ACM or platform-managed certificates.
-- Database traffic uses encryption in production.
-- Redis traffic uses encryption in production where supported.
+```text
+https://launchpad.christineadelusi.com
+```
 
-Sensitive credentials must never be transmitted over plaintext network connections.
+TLS is provided using AWS Certificate Manager.
+
+Public HTTP traffic is redirected to HTTPS.
+
+The trust path is:
+
+```text
+Browser
+   |
+   | HTTPS
+   v
+AWS Application Load Balancer
+   |
+   v
+Kubernetes Ingress Routing
+   |
+   +------> Frontend
+   |
+   +------> Backend API
+```
+
+Sensitive credentials must never be intentionally transmitted over plaintext
+public network connections.
+
+### DNS and Certificate Ownership Boundary
+
+The DNS zone and certificate lifecycle may cross Terraform ownership or AWS
+account boundaries.
+
+The platform therefore distinguishes between:
+
+- infrastructure it creates;
+- infrastructure it references;
+- externally owned DNS or certificate resources.
+
+Terraform must not accidentally destroy externally owned Route 53 zones or ACM
+certificates during environment teardown.
 
 ---
 
-## 37. Threat Scenarios
+## 37. AWS Load Balancer Controller Security
 
-### Threat: Credential Stuffing or Password Guessing
+The AWS Load Balancer Controller is treated as a platform dependency rather
+than an application component.
 
-Controls:
+It is managed through Argo CD and runs in:
 
-- Strong password policy
-- Generic login errors
-- Rate limiting
-- Audit logging
-- Future MFA support
+```text
+kube-system
+```
 
-### Threat: Horizontal Privilege Escalation
+Its AWS permissions are provided through a dedicated least-privilege identity.
+
+The controller may create and reconcile AWS load-balancing resources required
+by approved Kubernetes ingress configuration.
+
+Its permissions should not be shared with normal application workloads.
+
+This separation limits the impact of an application workload compromise.
+
+---
+
+## 38. Database Migration Security
+
+Schema migrations are automated through an Argo CD Sync hook.
+
+This provides a controlled deployment sequence rather than requiring manual
+database mutation during application rollout.
+
+The migration job:
+
+- runs from declarative GitOps configuration;
+- uses an approved application image;
+- receives database access through the same controlled secret-management
+  architecture;
+- runs with hardened Kubernetes security settings;
+- completes before dependent application reconciliation proceeds where the
+  configured hook ordering requires it.
+
+Migration credentials should have only the database permissions necessary for
+the migration strategy.
+
+---
+
+## 39. Private Container Registry Security
+
+Platform Launchpad uses private Amazon ECR repositories for application and
+selected platform images.
+
+Controls include:
+
+- Terraform-managed repositories;
+- lifecycle policies;
+- IAM-controlled push/pull permissions;
+- CI publication through dedicated permissions;
+- Kubernetes consumption from ECR;
+- immutable application image digests in GitOps desired state.
+
+Argo CD bootstrap dependencies are mirrored into dedicated private ECR
+repositories to reduce runtime dependence on public container registries
+during platform reconstruction.
+
+Public upstream images are treated as build/bootstrap inputs rather than the
+final intended private runtime source for the mirrored Argo CD components.
+
+---
+
+## 40. Threat Scenarios
+
+### Credential Stuffing or Password Guessing
+
+Controls include:
+
+- password hashing;
+- generic authentication failures;
+- audit logging;
+- planned rate limiting;
+- future MFA.
+
+### Horizontal Privilege Escalation
 
 A user attempts to access another user's environment.
 
 Controls:
 
-- Backend ownership checks
-- UUID identifiers
-- Resource concealment
-- Authorization tests
+- backend ownership checks;
+- UUID identifiers;
+- resource concealment;
+- authorization tests.
 
-UUIDs do not replace authorization.
+UUIDs are identifiers, not authorization controls.
 
-### Threat: Vertical Privilege Escalation
+### Vertical Privilege Escalation
 
-A regular user attempts to call an administrative endpoint.
-
-Controls:
-
-- Backend role enforcement
-- Admin route dependencies
-- Audit logging
-- Negative authorization tests
-
-### Threat: Client Assigns Itself as Admin
+A user attempts to invoke administrative operations.
 
 Controls:
 
-- Registration schema excludes role
-- Backend assigns `user`
-- Role changes are not exposed in the MVP
+- backend role enforcement;
+- protected admin routes;
+- audit logging;
+- authorization tests.
 
-### Threat: Environment Name Injection
-
-Controls:
-
-- Strict naming pattern
-- No direct shell interpolation
-- Structured infrastructure tooling
-- Input validation
-
-### Threat: JWT Theft
+### Secret Committed to Git
 
 Controls:
 
-- HTTPS
-- Short token lifetime
-- Secure storage strategy
-- Security headers
-- No token logging
-- Future refresh-token and revocation design
+- `.gitignore`;
+- Secrets Manager;
+- CSI-based secret delivery;
+- secret scanning;
+- review;
+- rotation procedure.
 
-### Threat: Database Exposure
-
-Controls:
-
-- Private RDS subnets
-- Restricted security groups
-- Strong credentials
-- TLS
-- No public endpoint
-- Encrypted backups
-
-### Threat: Secret Committed to Git
+### Compromised Jenkins
 
 Controls:
 
-- `.gitignore`
-- Secret scanning
-- Pull-request review
-- Placeholder examples
-- Credential rotation procedure
+- CI/CD separation;
+- dedicated AWS permissions;
+- no runtime reconciliation authority;
+- no unrestricted cluster-admin credential requirement;
+- GitOps changes remain visible in Git;
+- Argo CD performs deployment reconciliation.
 
-### Threat: Compromised Jenkins Pipeline
-
-Controls:
-
-- Least-privilege AWS role
-- Scoped GitHub access
-- No cluster-admin credentials
-- Protected pipeline changes
-- Credential masking
-- Image scanning
-
-### Threat: Malicious Container Image
+### Compromised Application Pod
 
 Controls:
 
-- Trusted base images
-- CI scanning
-- Controlled ECR repositories
-- Immutable identifiers
-- Future image signing and admission policy
+- private networking;
+- non-root execution;
+- dropped capabilities;
+- restricted privilege escalation;
+- read-only root filesystem where supported;
+- dedicated service account;
+- EKS Pod Identity;
+- least-privilege IAM;
+- restricted database network access.
 
-### Threat: Unauthorized Terraform Apply
-
-Controls:
-
-- Protected branches
-- Jenkins approval gates
-- Restricted IAM role
-- Remote-state protection
-- Plan review
-- Audit trail
-
-### Threat: Audit Log Data Leakage
+### Malicious or Replaced Container Image
 
 Controls:
 
-- Sanitized details
-- No secrets
-- Admin-only access
-- Retention controls
-- Structured schema
+- private ECR;
+- CI scanning;
+- controlled publication;
+- immutable image digest references;
+- Git-reviewed deployment state.
+
+Future controls may include image signing and admission verification.
+
+### Database Exposure
+
+Controls:
+
+- private RDS;
+- restricted security groups;
+- no public endpoint;
+- encrypted storage;
+- Secrets Manager credentials.
+
+### Unauthorized Terraform Apply
+
+Controls:
+
+- protected source;
+- plan review;
+- restricted AWS identity;
+- protected remote state;
+- auditable Git history;
+- drift validation.
+
+### GitOps Repository Compromise
+
+Controls:
+
+- repository access control;
+- branch protection;
+- review;
+- Git audit history;
+- Argo CD scope;
+- no plaintext runtime secrets in manifests.
+
+### Public Registry Dependency During Bootstrap
+
+Controls:
+
+- pinned upstream versions;
+- Terraform-managed private ECR mirrors;
+- controlled mirroring;
+- manifest rewriting;
+- validation that public runtime image references have been removed.
 
 ---
 
-## 38. Security Testing
+## 41. Security Testing
 
-Required test categories:
+Security validation includes application, infrastructure, and delivery
+controls.
 
-### Authentication Tests
+### Authentication
 
-- Successful registration
-- Duplicate email registration
-- Weak password rejection
-- Successful login
-- Invalid login
-- Disabled-user login
-- Expired token
-- Invalid token
+Test:
 
-### Authorization Tests
+- successful registration;
+- duplicate registration;
+- weak passwords;
+- successful login;
+- invalid login;
+- disabled users;
+- expired tokens;
+- invalid tokens.
 
-- User accesses own environment
-- User cannot access another user's environment
-- User cannot use admin endpoints
-- Admin can access system-wide resources
-- Disabled user cannot use existing token
+### Authorization
 
-### Input Tests
+Test:
 
-- Invalid UUID
-- Invalid environment name
-- Unsupported environment type
-- Oversized fields
-- Unknown fields
-- Invalid pagination
+- owner access;
+- cross-user denial;
+- admin restrictions;
+- disabled-user behavior.
 
-### Lifecycle Tests
+### Input
 
-- Duplicate environment conflict
-- Invalid state transition
-- Concurrent operation conflict
-- Destroyed environment behavior
+Test:
 
-### Security Pipeline Tests
+- invalid UUIDs;
+- invalid environment names;
+- unsupported operations;
+- invalid lifecycle transitions;
+- oversized fields;
+- pagination limits.
 
-- Dependency scan
-- Secret scan
-- Static analysis
-- Container scan
-- Infrastructure validation
+### Platform
+
+Validate:
+
+```bash
+terraform plan
+```
+
+Expected stable state:
+
+```text
+No changes.
+```
+
+Validate Argo CD:
+
+```bash
+kubectl get applications -n argocd
+```
+
+Expected applications should report:
+
+```text
+Synced
+Healthy
+```
+
+Validate application pods:
+
+```bash
+kubectl get pods -n platform-launchpad
+```
+
+Validate public TLS:
+
+```bash
+curl -I https://launchpad.christineadelusi.com/
+```
+
+Validate application readiness:
+
+```bash
+curl -sS https://launchpad.christineadelusi.com/health/ready
+```
+
+The validated development environment has demonstrated successful application
+responses, database readiness, worker processing, healthy GitOps
+reconciliation, and zero Terraform drift.
 
 ---
 
-## 39. Incident Response Expectations
+## 42. Incident Response Expectations
 
-A future production version should define:
+A longer-lived production deployment should define formal procedures for:
 
-1. Detection
-2. Triage
-3. Containment
-4. Credential rotation
-5. Recovery
-6. Root-cause analysis
-7. Corrective actions
-8. Documentation
+- credential compromise;
+- secret rotation;
+- compromised application images;
+- unauthorized IAM activity;
+- compromised CI credentials;
+- GitOps repository compromise;
+- database compromise;
+- suspicious authentication activity;
+- infrastructure drift;
+- certificate compromise.
 
-For the portfolio release, minimum runbooks should cover:
-
-- Exposed credential
-- Compromised user account
-- Unauthorized administrative action
-- Vulnerable container image
-- Database connectivity failure
-- Failed or suspicious deployment
+The development portfolio environment emphasizes reproducibility, which also
+supports incident recovery: infrastructure and workloads can be destroyed and
+reconstructed from authoritative configuration rather than relying on
+untracked manual state.
 
 ---
 
-## 40. Security Responsibilities
+## 43. Teardown Security
 
-| Component | Primary Security Responsibility |
+Environment teardown is both a cost-control operation and a security
+operation.
+
+Before teardown:
+
+1. confirm required evidence and documentation are preserved;
+2. ensure source and GitOps repositories are pushed;
+3. verify Terraform configuration represents the intended infrastructure;
+4. verify no required secret exists only inside a temporary runtime resource;
+5. identify externally owned Route 53 and ACM resources that must survive;
+6. confirm state storage required for Terraform remains available.
+
+During teardown:
+
+- use Terraform for Terraform-owned AWS infrastructure;
+- avoid manually deleting resources that Terraform still owns unless recovery
+  requires it;
+- verify load balancers and NAT resources are removed;
+- verify temporary compute resources are removed;
+- preserve intentionally external/shared resources.
+
+After teardown:
+
+- inspect Terraform state;
+- inspect AWS for orphaned cost-generating resources;
+- confirm sensitive temporary resources are gone;
+- preserve only the resources intentionally required for rebuild.
+
+---
+
+## 44. Recovery Security
+
+Reconstruction follows controlled trust establishment.
+
+A high-level recovery sequence is:
+
+```text
+Terraform foundation
+        |
+        v
+AWS infrastructure
+        |
+        v
+EKS + IAM + ECR + Secrets prerequisites
+        |
+        v
+Argo CD bootstrap
+        |
+        v
+GitOps Application bootstrap
+        |
+        v
+Argo CD reconciliation
+        |
+        v
+Application workloads
+        |
+        v
+Validation
+```
+
+The bootstrap process must not bypass security controls merely because the
+cluster is being rebuilt.
+
+Recovery should restore:
+
+- identity boundaries;
+- network boundaries;
+- private registries;
+- workload identity;
+- secret delivery;
+- TLS;
+- GitOps reconciliation;
+- hardened workload settings.
+
+---
+
+## 45. Security Ownership Boundaries
+
+Platform Launchpad deliberately separates authority.
+
+| Layer | Primary Authority |
 |---|---|
-| Next.js | Safe rendering, session handling, route UX |
-| FastAPI | Authentication, authorization, validation |
-| PostgreSQL | Durable application records |
-| Redis | Temporary queue data |
-| Worker | Safe and idempotent lifecycle processing |
-| Jenkins | Secure build and publication |
-| GitHub | Source governance and review |
-| Terraform | Reproducible and controlled infrastructure |
-| Argo CD | Controlled runtime reconciliation |
-| EKS | Workload isolation and runtime controls |
-| AWS IAM | Cloud access control |
-| Secrets Manager | Production secret storage |
-| Observability stack | Detection and investigation |
+| Application authentication | FastAPI |
+| Application authorization | FastAPI |
+| User/environment state | PostgreSQL |
+| Runtime secrets | AWS Secrets Manager |
+| AWS infrastructure | Terraform |
+| Terraform state | Remote S3-backed state architecture |
+| Application artifacts | Amazon ECR |
+| CI validation and publication | Jenkins |
+| Kubernetes desired state | GitOps repository |
+| Kubernetes reconciliation | Argo CD |
+| AWS workload identity | EKS Pod Identity + IAM |
+| Public ingress | ALB + AWS Load Balancer Controller |
+| TLS certificate | ACM |
+| DNS | Route 53 / documented ownership boundary |
+
+No single component is intentionally given authority over every layer.
 
 ---
 
-## 41. Known MVP Limitations
+## 46. Implemented Versus Future Controls
 
-The MVP initially lacks:
+It is important to distinguish deployed controls from roadmap items.
 
-- Multifactor authentication
-- Password reset
-- Email verification
-- Refresh tokens
-- Token revocation list
-- Enterprise SSO
-- Full rate limiting
-- Web Application Firewall
-- Image signing
-- Admission control
-- Complete network policies
-- Automated security incident response
+### Implemented
 
-These limitations must be documented and addressed before claiming production readiness.
+- private EKS workload networking;
+- private RDS;
+- private Redis networking;
+- Secrets Manager;
+- Secrets Store CSI;
+- EKS Pod Identity;
+- private ECR;
+- ALB ingress;
+- ACM TLS;
+- HTTP-to-HTTPS redirect;
+- Argo CD;
+- Jenkins/Argo CD separation;
+- immutable image digests;
+- hardened application containers;
+- Terraform remote state;
+- Terraform drift validation;
+- GitOps reconciliation;
+- controlled Argo CD bootstrap.
+
+### Future Hardening
+
+Potential later improvements include:
+
+- MFA;
+- enterprise SSO for Argo CD;
+- comprehensive NetworkPolicy;
+- Pod Security Admission enforcement;
+- image signing;
+- SBOM generation;
+- provenance attestations;
+- admission-time signature verification;
+- formal WAF policy;
+- centralized SIEM;
+- automated secret rotation;
+- expanded rate limiting.
+
+Future controls must not be represented as currently deployed until they have
+been implemented and validated.
 
 ---
 
-## 42. Security Acceptance Criteria
+## 47. Security Validation Summary
 
-The Sprint 0 security design is complete when:
+The development environment demonstrates security across multiple platform
+layers:
 
-- Trust boundaries are documented.
-- Protected assets are identified.
-- Authentication behavior is defined.
-- Password requirements are defined.
-- JWT requirements are defined.
-- RBAC and ownership rules are defined.
-- Database and Redis controls are defined.
-- Worker security expectations are defined.
-- Secret-management requirements are defined.
-- Jenkins and GitOps permissions are defined.
-- AWS IAM and network controls are defined.
-- Kubernetes security requirements are defined.
-- Audit and logging restrictions are defined.
-- Threat scenarios and mitigations are documented.
-- Required security tests are identified.
-- Known MVP limitations are documented.
+```text
+Source
+  |
+  v
+Jenkins CI
+  |
+  +---- private immutable artifact ----> ECR
+  |
+  +---- desired-state update ----------> GitOps
+                                            |
+                                            v
+                                         Argo CD
+                                            |
+                                            v
+                                        Kubernetes
+                                            |
+                  +-------------------------+----------------------+
+                  |                         |                      |
+                  v                         v                      v
+             Pod Identity            CSI Secrets             Private Data
+                  |                         |                      |
+                  v                         v                      v
+                 IAM                 Secrets Manager          RDS / Redis
+```
+
+The platform demonstrates that security is not isolated to authentication or
+networking. It is incorporated into:
+
+- source control;
+- CI;
+- artifact management;
+- GitOps;
+- Kubernetes;
+- AWS IAM;
+- secret management;
+- private networking;
+- database access;
+- container runtime configuration;
+- infrastructure state;
+- recovery;
+- teardown.
+
+This security model therefore represents the **as-built Platform Launchpad
+development architecture**, while explicitly identifying controls that remain
+future production-hardening work.

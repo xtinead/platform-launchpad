@@ -1,1228 +1,2084 @@
-# Platform Launchpad — CI/CD Design
+# Platform Launchpad — CI/CD and GitOps Delivery Design
 
 ## 1. Purpose
 
-This document defines the Continuous Integration and Continuous Delivery design for Platform Launchpad.
+This document defines the Continuous Integration, artifact-delivery, GitOps,
+and runtime reconciliation architecture for Platform Launchpad.
 
-The delivery model uses:
+The delivery model separates build-time responsibilities from runtime
+deployment authority.
 
-- GitHub for source control
-- Jenkins for Continuous Integration
-- Amazon ECR for container images
-- A GitOps repository for desired deployment state
-- Argo CD for Kubernetes reconciliation
-- Amazon EKS for runtime workloads
+The platform uses:
 
-The design intentionally separates build responsibilities from runtime deployment permissions.
+- GitHub for source control;
+- Jenkins for Continuous Integration;
+- Amazon ECR for private container storage;
+- a dedicated GitOps repository for Kubernetes desired state;
+- Argo CD for runtime reconciliation;
+- Amazon EKS for Kubernetes workloads;
+- Terraform for AWS infrastructure provisioning;
+- Alembic migrations executed through Argo CD Sync hooks.
 
-Jenkins validates, tests, scans, builds, publishes, and updates desired state.
+The central delivery principle is:
 
-Argo CD deploys the approved desired state to Kubernetes.
+```text
+Jenkins builds and publishes.
+Git defines desired state.
+Argo CD deploys.
+Terraform provisions infrastructure.
+```
 
----
-
-## 2. Objectives
-
-The CI/CD platform must:
-
-- Validate every proposed source-code change.
-- Prevent untested code from reaching protected branches.
-- Build reproducible container images.
-- Scan source code, dependencies, and container images.
-- Publish immutable application artifacts.
-- Preserve traceability from Git commit to runtime image.
-- Promote changes through Git-controlled environments.
-- Prevent Jenkins from requiring direct application-cluster deployment access.
-- Support rollback through Git history.
-- Produce clear pipeline status and failure information.
-- Protect credentials and deployment permissions.
-- Support manual approval for sensitive environments.
-- Keep AWS infrastructure costs controlled.
+Jenkins does not directly own application deployment into Kubernetes.
 
 ---
 
-## 3. Delivery Principles
+## 2. Current Implementation Status
 
-### 3.1 Build Once, Promote the Same Artifact
+The Platform Launchpad AWS development environment has been deployed and
+validated.
 
-The platform builds a container image once.
+Implemented delivery capabilities include:
 
-The same tested image digest is promoted through:
+- application source maintained in GitHub;
+- separate GitOps repository;
+- private Amazon ECR application repository;
+- private ECR repository for AWS Load Balancer Controller;
+- private ECR repositories for Argo CD bootstrap dependencies;
+- application deployments using immutable image digests;
+- Argo CD installed in Amazon EKS;
+- Argo CD Application for Platform Launchpad;
+- Argo CD Application for AWS Load Balancer Controller;
+- database migrations executed as an Argo CD Sync hook;
+- GitOps-managed ingress;
+- GitOps-managed runtime ServiceAccounts;
+- GitOps-managed Secrets Store CSI configuration;
+- GitOps-managed application workloads;
+- HTTPS ingress through AWS ALB and ACM;
+- end-to-end deployment-request processing;
+- validated Argo CD `Synced` and `Healthy` state;
+- Terraform zero-drift validation;
+- reproducible Argo CD bootstrap;
+- reproducible GitOps Application bootstrap.
 
-- Development
-- Staging
-- Production-style demonstration
+Current Argo CD Applications:
 
-The platform must not rebuild different images for each environment.
+```text
+platform-launchpad-development
+aws-load-balancer-controller-development
+```
 
-### 3.2 Git Is the Deployment Source of Truth
+Both have been validated as:
 
-The GitOps repository defines the desired Kubernetes deployment state.
-
-Runtime changes should not be performed manually unless required for emergency recovery and subsequently reconciled back into Git.
-
-### 3.3 CI and Runtime Deployment Are Separate
-
-Jenkins performs Continuous Integration and updates the GitOps repository.
-
-Argo CD performs runtime reconciliation.
-
-Jenkins does not require unrestricted `kubectl` access.
-
-### 3.4 Artifacts Are Immutable
-
-Published container images must not be overwritten.
-
-Human-readable tags may exist, but image digests provide the authoritative artifact identity.
-
-### 3.5 Security Checks Are Pipeline Gates
-
-Security scanning is part of the release process rather than an optional post-deployment activity.
-
-### 3.6 Every Release Is Traceable
-
-A running workload should be traceable to:
-
-- Git repository
-- Source commit
-- Jenkins build
-- Container image tag
-- Container image digest
-- GitOps commit
-- Runtime environment
-
-### 3.7 Rollback Uses Known-Good State
-
-Rollback is performed by restoring a previously approved image digest through a Git revert or controlled GitOps change.
-
----
-
-## 4. High-Level Delivery Architecture
-
-```mermaid
-flowchart LR
-    DEV[Developer]
-    APPREPO[Application Repository]
-    PR[Pull Request]
-    JENKINS[Jenkins]
-    TESTS[Tests and Quality Gates]
-    SCANS[Security Scans]
-    BUILD[Container Build]
-    ECR[Amazon ECR]
-    GITOPS[GitOps Repository]
-    APPROVAL[Environment Approval]
-    ARGO[Argo CD]
-    EKS[Amazon EKS]
-    OBS[Observability]
-
-    DEV --> APPREPO
-    APPREPO --> PR
-    PR --> JENKINS
-    JENKINS --> TESTS
-    TESTS --> SCANS
-    SCANS --> BUILD
-    BUILD --> ECR
-    ECR --> GITOPS
-    GITOPS --> APPROVAL
-    APPROVAL --> ARGO
-    ARGO --> EKS
-    EKS --> OBS
+```text
+Synced
+Healthy
 ```
 
 ---
 
-## 5. Repository Responsibilities
+## 3. Delivery Objectives
 
-### Application Repository
+The CI/CD platform is designed to:
 
-The initial monorepo contains:
-
-- Next.js frontend
-- FastAPI backend
-- Python worker
-- Tests
-- Dockerfiles
-- Jenkins pipeline definitions
-- Local Docker Compose configuration
-- Product and architecture documentation
-
-The application repository does not become the runtime source of truth after image publication.
-
-### GitOps Repository
-
-The GitOps repository contains:
-
-- Kubernetes base manifests
-- Development overlay
-- Staging overlay
-- Production overlay
-- Image tags or digests
-- ConfigMaps
-- Ingress configuration
-- Argo CD Application definitions
-
-The GitOps repository must not contain plaintext secrets.
-
-### Infrastructure Repository
-
-Terraform-managed infrastructure may later move into a dedicated repository containing:
-
-- Remote-state bootstrap
-- Networking
-- IAM
-- ECR
-- EKS
-- RDS
-- DNS
-- Certificates
-- Observability infrastructure
+- validate proposed source-code changes;
+- prevent untested code from being promoted;
+- build reproducible container images;
+- scan source code, dependencies, and images;
+- publish private immutable artifacts;
+- preserve source-to-runtime traceability;
+- separate CI from runtime CD;
+- make Git the desired-state authority;
+- prevent Jenkins from requiring unrestricted cluster deployment access;
+- support Git-based rollback;
+- expose clear failure states;
+- protect credentials;
+- support approval gates where appropriate;
+- keep infrastructure and application delivery workflows separate;
+- support environment teardown and rebuild;
+- make the platform suitable for interview demonstrations.
 
 ---
 
-## 6. Branching Strategy
+## 4. Core Delivery Principles
 
-Initial branches:
+### 4.1 Build Once, Promote the Same Artifact
+
+A container artifact should be built once and promoted without rebuilding.
+
+The same approved image digest can move through:
+
+```text
+Development
+    |
+    v
+Staging
+    |
+    v
+Production
+```
+
+A different environment should not receive a different binary built from the
+same source commit.
+
+---
+
+### 4.2 Git Is the Runtime Source of Truth
+
+The GitOps repository defines Kubernetes desired state.
+
+Normal runtime changes should not be performed manually with:
+
+```text
+kubectl edit
+kubectl set image
+kubectl patch
+```
+
+unless required for emergency recovery.
+
+Any emergency change must subsequently be reconciled back into Git.
+
+---
+
+### 4.3 Jenkins and Argo CD Have Different Authorities
+
+Jenkins owns:
+
+- checkout;
+- tests;
+- linting;
+- static analysis;
+- security scanning;
+- image build;
+- image publication;
+- GitOps updates.
+
+Argo CD owns:
+
+- desired-state comparison;
+- Kubernetes reconciliation;
+- Sync hooks;
+- rollout state;
+- deployment health.
+
+Jenkins does not require unrestricted `kubectl` deployment access.
+
+---
+
+### 4.4 Terraform Owns AWS Infrastructure
+
+Terraform provisions the AWS foundation required by the runtime.
+
+Examples include:
+
+- VPC;
+- EKS;
+- IAM;
+- Pod Identity;
+- RDS;
+- Redis;
+- ECR;
+- Secrets Manager;
+- VPC endpoints;
+- NAT;
+- security groups.
+
+Terraform does not normally deploy application Kubernetes workloads.
+
+---
+
+### 4.5 Artifacts Are Immutable
+
+Human-readable image tags may exist, but the deployment trust anchor is the
+image digest.
+
+Example:
+
+```text
+201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application@sha256:<digest>
+```
+
+GitOps manifests reference immutable image digests.
+
+---
+
+### 4.6 Security Checks Are Delivery Gates
+
+Security checks are part of delivery, not an optional afterthought.
+
+Relevant validation may include:
+
+- dependency scanning;
+- static analysis;
+- secret scanning;
+- container scanning;
+- Terraform validation;
+- Kubernetes manifest validation.
+
+---
+
+### 4.7 Every Release Is Traceable
+
+A running application should be traceable back through:
+
+```text
+Runtime Pod
+    |
+    v
+Image Digest
+    |
+    v
+Amazon ECR
+    |
+    v
+Jenkins Build
+    |
+    v
+Source Commit
+```
+
+and through the desired-state path:
+
+```text
+Runtime Pod
+    |
+    v
+Argo CD Application
+    |
+    v
+GitOps Commit
+    |
+    v
+Image Digest
+```
+
+---
+
+### 4.8 Rollback Restores Known-Good Desired State
+
+Rollback should restore previously approved desired state.
+
+Typical rollback mechanisms include:
+
+- Git revert;
+- corrective GitOps commit;
+- previous immutable image digest.
+
+The preferred model is not manual cluster mutation.
+
+---
+
+## 5. High-Level Delivery Architecture
+
+```mermaid
+flowchart LR
+    DEV[Developer]
+    APP[Application Repository]
+    JENKINS[Jenkins]
+    TEST[Tests / Quality Gates]
+    SCAN[Security Validation]
+    BUILD[Container Build]
+    ECR[Private Amazon ECR]
+    GITOPS[GitOps Repository]
+    ARGO[Argo CD]
+    MIGRATION[Database Migration Hook]
+    EKS[Amazon EKS]
+    VERIFY[Health Validation]
+
+    DEV --> APP
+    APP --> JENKINS
+    JENKINS --> TEST
+    TEST --> SCAN
+    SCAN --> BUILD
+    BUILD --> ECR
+    ECR --> JENKINS
+    JENKINS --> GITOPS
+    GITOPS --> ARGO
+    ARGO --> MIGRATION
+    MIGRATION --> EKS
+    EKS --> VERIFY
+```
+
+---
+
+## 6. Repository Model
+
+Platform Launchpad separates application source from runtime desired state.
+
+### Application Repository
+
+Repository:
+
+```text
+platform-launchpad
+```
+
+Contains:
+
+- Next.js frontend;
+- FastAPI backend;
+- Python worker;
+- tests;
+- Dockerfiles;
+- Jenkins configuration;
+- Terraform;
+- Argo CD bootstrap scripts;
+- application documentation;
+- architecture documentation.
+
+The application repository is not the Kubernetes runtime source of truth after
+artifact publication.
+
+---
+
+### GitOps Repository
+
+Repository:
+
+```text
+platform-launchpad-gitops
+```
+
+Contains:
+
+- Kubernetes base manifests;
+- development overlay;
+- runtime ServiceAccounts;
+- backend configuration;
+- frontend configuration;
+- worker configuration;
+- SecretProviderClass;
+- Ingress;
+- migration Job;
+- Argo CD Application definitions;
+- AWS Load Balancer Controller values;
+- immutable application image digests.
+
+Plaintext runtime secrets must not be committed.
+
+---
+
+## 7. Current GitOps Structure
+
+Representative GitOps structure:
+
+```text
+platform-launchpad-gitops/
+├── applications/
+│   ├── development.yaml
+│   └── aws-load-balancer-controller-development.yaml
+├── base/
+│   ├── backend/
+│   ├── frontend/
+│   ├── worker/
+│   ├── migration/
+│   ├── runtime/
+│   ├── ingress.yaml
+│   └── namespace.yaml
+├── overlays/
+│   └── development/
+└── platform/
+    └── aws-load-balancer-controller/
+        └── development-values.yaml
+```
+
+The application deployment and the platform controller are represented as
+separate Argo CD Applications.
+
+---
+
+## 8. Argo CD Applications
+
+### Platform Launchpad
+
+Application:
+
+```text
+platform-launchpad-development
+```
+
+Source:
+
+```text
+platform-launchpad-gitops
+```
+
+Path:
+
+```text
+overlays/development
+```
+
+Destination:
+
+```text
+namespace: platform-launchpad
+```
+
+---
+
+### AWS Load Balancer Controller
+
+Application:
+
+```text
+aws-load-balancer-controller-development
+```
+
+The Application uses:
+
+- upstream AWS EKS Helm chart;
+- GitOps-managed environment values;
+- private ECR image location.
+
+Destination:
+
+```text
+namespace: kube-system
+```
+
+---
+
+## 9. Current Sync Policy
+
+The current development Applications use manual synchronization rather than
+automatic self-healing.
+
+Sync options include:
+
+```text
+CreateNamespace=false
+PruneLast=true
+ApplyOutOfSyncOnly=true
+```
+
+This allows synchronization to be initiated deliberately while preserving
+GitOps authority.
+
+Future environments may enable:
+
+```yaml
+automated:
+  prune: true
+  selfHeal: true
+```
+
+after the operational model is intentionally reviewed.
+
+---
+
+## 10. Continuous Integration Architecture
+
+Jenkins represents the Continuous Integration boundary.
+
+The intended application pipeline performs:
+
+1. checkout;
+2. repository validation;
+3. dependency installation;
+4. formatting and linting;
+5. unit tests;
+6. API contract validation;
+7. integration tests;
+8. static analysis;
+9. dependency scanning;
+10. secret scanning;
+11. container build;
+12. image scanning;
+13. ECR authentication;
+14. image publication;
+15. digest capture;
+16. GitOps desired-state update;
+17. deployment verification.
+
+The exact stage implementation may evolve, but the CI/CD authority boundary
+does not.
+
+---
+
+## 11. Pull Request Validation
+
+Pull requests should run checks appropriate to the changed components.
+
+Backend checks may include:
+
+- formatting;
+- linting;
+- unit tests;
+- API tests;
+- authorization tests;
+- dependency scanning.
+
+Frontend checks may include:
+
+- ESLint;
+- TypeScript validation;
+- component tests;
+- build validation.
+
+Infrastructure checks may include:
+
+- `terraform fmt -check`;
+- `terraform validate`;
+- Terraform security scanning;
+- policy checks.
+
+GitOps checks may include:
+
+- YAML validation;
+- Kustomize rendering;
+- Helm value validation;
+- immutable image reference validation.
+
+---
+
+## 12. Repository Validation
+
+CI should reject unsafe repository state.
+
+Checks include:
+
+- no tracked `.env`;
+- no tracked `.tfstate`;
+- no tracked `.terraform`;
+- no credentials in source;
+- expected manifests present;
+- expected Dockerfiles present;
+- required lock files present;
+- API specification present;
+- migration files consistent.
+
+---
+
+## 13. Dependency Installation
+
+### Backend
+
+Python dependencies should be installed from committed dependency definitions.
+
+The pipeline should avoid silently updating dependencies during normal builds.
+
+### Frontend
+
+Node dependencies should use the committed lock file.
+
+Preferred deterministic installation:
+
+```bash
+npm ci
+```
+
+instead of:
+
+```bash
+npm install
+```
+
+for CI execution.
+
+---
+
+## 14. Formatting and Linting
+
+Backend validation may include:
+
+- Ruff;
+- Black check mode;
+- import validation;
+- type checking.
+
+Frontend validation may include:
+
+- ESLint;
+- TypeScript compiler;
+- Prettier check mode.
+
+Formatting and lint failures should fail the pipeline.
+
+---
+
+## 15. Unit Testing
+
+Backend tests cover concerns such as:
+
+- authentication;
+- authorization;
+- environment ownership;
+- environment lifecycle;
+- deployment requests;
+- validation;
+- persistence behavior.
+
+Worker tests should cover:
+
+- polling logic;
+- request selection;
+- lifecycle transitions;
+- retries;
+- failure state;
+- idempotency.
+
+Frontend tests should cover:
+
+- authentication UI;
+- environment views;
+- deployment forms;
+- state rendering;
+- role-aware behavior.
+
+---
+
+## 16. API Contract Validation
+
+The repository includes an OpenAPI specification.
+
+CI should validate:
+
+```text
+docs/api/openapi.yaml
+```
+
+and compare implementation behavior where appropriate.
+
+Checks may include:
+
+- parse validity;
+- OpenAPI version;
+- reference resolution;
+- required routes;
+- response schema compatibility.
+
+Unexpected API drift should fail validation once contract enforcement is
+enabled.
+
+---
+
+## 17. Integration Testing
+
+Integration tests may provision local dependencies such as:
+
+- PostgreSQL;
+- backend;
+- worker;
+- frontend;
+- Redis where a test specifically requires Redis behavior.
+
+Important integration scenarios include:
+
+- database migrations;
+- registration;
+- authentication;
+- environment creation;
+- deployment-request creation;
+- worker processing;
+- environment lifecycle changes;
+- authorization failures.
+
+The current production-style worker path uses database-backed polling rather
+than Redis as its primary deployment-request queue.
+
+---
+
+## 18. Static Analysis
+
+Static analysis may include:
+
+- Python code analysis;
+- TypeScript analysis;
+- SonarQube;
+- Terraform linting;
+- Dockerfile analysis;
+- Kubernetes manifest validation.
+
+Quality gates should block critical issues where policy requires.
+
+---
+
+## 19. Dependency Security Scanning
+
+Dependencies should be scanned before release.
+
+Targets include:
+
+- Python packages;
+- Node packages;
+- container dependencies;
+- base images.
+
+Critical vulnerabilities should block promotion unless a reviewed exception is
+documented.
+
+---
+
+## 20. Secret Scanning
+
+CI should detect exposed credentials such as:
+
+- AWS access keys;
+- GitHub tokens;
+- passwords;
+- private keys;
+- database URLs;
+- JWT signing secrets.
+
+A confirmed secret finding should trigger:
+
+1. pipeline failure;
+2. credential revocation;
+3. repository remediation;
+4. security review.
+
+---
+
+## 21. Container Build Strategy
+
+The application runtime includes:
+
+- frontend;
+- backend;
+- worker.
+
+The current AWS architecture uses a shared private application ECR repository:
+
+```text
+platform-launchpad-development-application
+```
+
+Application images are distinguished through the image content and published
+artifact references used by GitOps.
+
+Container requirements include:
+
+- reproducible build inputs;
+- explicit base-image versions;
+- multi-stage builds where useful;
+- no `.env`;
+- no credentials;
+- no Git metadata;
+- minimized runtime packages;
+- non-root execution;
+- hardened Kubernetes runtime security context.
+
+---
+
+## 22. Container Security Scanning
+
+Images should be scanned before promotion.
+
+Policy may include:
+
+```text
+Critical -> block
+High     -> remediate or approve explicitly
+Medium   -> track
+Low      -> track
+```
+
+Scan findings should be retained as pipeline evidence where practical.
+
+---
+
+## 23. Amazon ECR Authentication
+
+Jenkins should authenticate to ECR through AWS role-based access.
+
+The CI architecture uses dedicated Terraform-managed identities rather than
+granting Jenkins unrestricted AWS permissions.
+
+The trust model is:
+
+```text
+Jenkins Identity
+      |
+      v
+Assume CI Delivery Role
+      |
+      v
+Approved ECR Actions
+```
+
+Long-lived administrative AWS access keys should not be embedded in the
+pipeline.
+
+---
+
+## 24. ECR Repository Model
+
+### Application Repository
+
+```text
+platform-launchpad-development-application
+```
+
+Stores application artifacts used by:
+
+- backend;
+- frontend;
+- worker.
+
+### AWS Load Balancer Controller Repository
+
+```text
+platform-launchpad-development-aws-load-balancer-controller
+```
+
+Stores the mirrored controller image used by the Argo CD-managed Helm release.
+
+### Argo CD Bootstrap Repositories
+
+```text
+platform-launchpad-development-argocd
+platform-launchpad-development-argocd-dex
+platform-launchpad-development-argocd-redis
+```
+
+These repositories support deterministic Argo CD bootstrap.
+
+---
+
+## 25. Immutable Image Delivery
+
+The GitOps repository deploys application images by digest.
+
+Example:
+
+```yaml
+images:
+  - name: platform-launchpad-backend
+    newName: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application
+    digest: sha256:<digest>
+```
+
+This makes the running artifact independent of tag mutation.
+
+Human-readable tags remain useful for:
+
+- debugging;
+- build metadata;
+- releases.
+
+The digest remains the authoritative runtime identifier.
+
+---
+
+## 26. GitOps Update Strategy
+
+Jenkins updates the appropriate environment overlay after publishing an
+approved image.
+
+A GitOps change should be:
+
+- small;
+- explicit;
+- attributable;
+- reviewable;
+- reversible.
+
+Example commit:
+
+```text
+deploy(dev): promote backend image digest
+```
+
+Useful commit metadata may include:
+
+```text
+Source repository
+Source commit
+Jenkins build
+Image digest
+Target environment
+```
+
+---
+
+## 27. GitOps Reconciliation
+
+Argo CD detects GitOps changes and compares desired state to cluster state.
+
+```text
+GitOps Commit
+      |
+      v
+Argo CD
+      |
+      v
+Diff
+      |
+      +---- no difference ---> Synced
+      |
+      +---- difference ------> Reconcile
+```
+
+Jenkins does not invoke direct application deployment commands as part of the
+normal application release path.
+
+---
+
+## 28. Database Migration Delivery
+
+Database schema evolution is integrated with Argo CD.
+
+The GitOps repository defines a migration Job:
+
+```text
+database-migration
+```
+
+The Job runs:
+
+```text
+alembic upgrade head
+```
+
+as an Argo CD Sync hook.
+
+This makes database migration part of the deployment lifecycle.
+
+---
+
+## 29. Migration Sync Ordering
+
+The application currently uses sync waves.
+
+Representative ordering:
+
+```text
+Wave -3
+    Namespace
+
+Wave -2
+    ServiceAccounts
+    SecretProviderClass
+
+Wave -1
+    Database migration Job
+
+Wave 0
+    Backend
+    Frontend
+    Worker
+    Services
+    Ingress
+```
+
+The migration Job must complete before the normal application synchronization
+can be considered successful.
+
+---
+
+## 30. Migration Failure Behavior
+
+If the migration Job fails:
+
+- Argo CD reports hook failure;
+- application synchronization does not complete successfully;
+- failed migration state remains visible in Argo CD;
+- investigation occurs before continuing promotion.
+
+This is preferable to hiding schema changes inside application startup logic.
+
+---
+
+## 31. Argo CD Bootstrap Delivery
+
+Argo CD itself cannot initially be installed by Argo CD.
+
+Platform Launchpad therefore includes:
+
+```text
+bootstrap/argocd/
+```
+
+with:
+
+```text
+README.md
+images.env
+install.sh
+rewrite_manifest.py
+apply-applications.sh
+```
+
+---
+
+## 32. Argo CD Bootstrap Flow
+
+The bootstrap performs:
+
+```text
+Terraform Outputs
+      |
+      v
+Validate AWS Identity
+      |
+      v
+Update EKS Kubeconfig
+      |
+      v
+Authenticate to ECR
+      |
+      v
+Check Private Images
+      |
+      v
+Mirror Missing Images
+      |
+      v
+Download Pinned Argo CD Manifest
+      |
+      v
+Rewrite Public Runtime Images
+      |
+      v
+Validate Manifest
+      |
+      v
+Install Argo CD
+      |
+      v
+Validate CRDs / Pods
+```
+
+Pinned versions include:
+
+```text
+Argo CD  v3.5.2
+Dex      v2.45.1
+Redis    8.2.3-alpine
+```
+
+---
+
+## 33. Private Bootstrap Supply Chain
+
+Argo CD runtime images are mirrored into private ECR.
+
+The bootstrap script validates that rewritten manifests do not retain runtime
+references to:
+
+```text
+quay.io
+ghcr.io
+public.ecr.aws
+```
+
+for the mirrored Argo CD components.
+
+This improves rebuild consistency and artifact control.
+
+---
+
+## 34. GitOps Application Bootstrap
+
+After Argo CD exists, the following script registers initial Applications:
+
+```bash
+./bootstrap/argocd/apply-applications.sh
+```
+
+Applications:
+
+```text
+aws-load-balancer-controller-development
+platform-launchpad-development
+```
+
+The script has been validated as idempotent.
+
+When desired state already matches:
+
+```text
+unchanged
+```
+
+is expected.
+
+---
+
+## 35. Environment Promotion Model
+
+The intended promotion path is:
+
+```text
+Development
+    |
+    v
+Staging
+    |
+    v
+Production
+```
+
+The current deployed AWS implementation is:
+
+```text
+development
+```
+
+Staging and production remain future environment expansions.
+
+The design principle remains build-once/promote-the-same-digest.
+
+---
+
+## 36. Development Promotion
+
+Development may be updated after successful integration validation.
+
+The desired-state change updates:
+
+```text
+overlays/development
+```
+
+and is reconciled by:
+
+```text
+platform-launchpad-development
+```
+
+---
+
+## 37. Staging Promotion
+
+A future staging environment should receive the same immutable image digest
+validated in development.
+
+Typical gates may include:
+
+- integration tests;
+- security scans;
+- development health;
+- migration compatibility;
+- release candidate approval.
+
+---
+
+## 38. Production Promotion
+
+A future production environment should require stronger controls.
+
+Potential gates include:
+
+- manual approval;
+- production change review;
+- rollback target confirmation;
+- backup verification;
+- security scan approval;
+- migration review.
+
+The same image digest should be promoted rather than rebuilt.
+
+---
+
+## 39. Approval Gates
+
+Manual approval is appropriate for higher-risk operations such as:
+
+- production Terraform apply;
+- production GitOps promotion;
+- destructive migrations;
+- security exceptions;
+- emergency rollback.
+
+Approval context should include:
+
+- source commit;
+- image digest;
+- test results;
+- scan results;
+- Terraform plan where applicable;
+- migration impact;
+- rollback target.
+
+---
+
+## 40. Rollback Strategy
+
+### Application Rollback
+
+Typical rollback:
+
+1. identify known-good image digest;
+2. revert the GitOps commit or create a corrective commit;
+3. Argo CD reconciles the previous desired state;
+4. verify application health;
+5. verify database compatibility;
+6. record the rollback.
+
+---
+
+### Database Rollback
+
+Database rollback is handled separately.
+
+Application rollback must not assume every migration is safely reversible.
+
+Preferred migration practices include:
+
+- backward-compatible schema changes;
+- expand/contract patterns;
+- pre-deployment backup where required;
+- explicit destructive migration approval.
+
+---
+
+### Infrastructure Rollback
+
+Infrastructure correction uses Terraform.
+
+Typical process:
+
+```text
+Review failure
+    |
+    v
+Correct Terraform
+    |
+    v
+terraform plan
+    |
+    v
+Review
+    |
+    v
+terraform apply
+```
+
+Direct rollback of infrastructure state without understanding the dependency
+impact should be avoided.
+
+---
+
+## 41. Failure Handling
+
+### Test Failure
+
+- stop pipeline;
+- do not publish release artifact;
+- report failing stage.
+
+### Security Scan Failure
+
+- stop pipeline;
+- retain findings;
+- do not update GitOps.
+
+### Container Build Failure
+
+- stop pipeline;
+- publish nothing;
+- preserve logs.
+
+### ECR Push Failure
+
+- stop pipeline;
+- do not update GitOps to a missing artifact.
+
+### GitOps Update Failure
+
+- application artifact may remain safely in ECR;
+- runtime desired state remains unchanged;
+- pipeline reports failure.
+
+### Argo CD Sync Failure
+
+- inspect Argo CD resources;
+- inspect hook status;
+- inspect Kubernetes events;
+- inspect pod logs;
+- correct GitOps state;
+- revert where appropriate.
+
+### Migration Failure
+
+- do not treat deployment as successful;
+- inspect migration Job;
+- correct migration;
+- re-run controlled synchronization.
+
+---
+
+## 42. Post-Deployment Verification
+
+Deployment validation should include:
+
+```bash
+kubectl get applications -n argocd
+```
+
+Expected:
+
+```text
+Synced
+Healthy
+```
+
+Application workloads:
+
+```bash
+kubectl get pods -n platform-launchpad
+```
+
+Public frontend:
+
+```bash
+curl -I https://launchpad.christineadelusi.com/
+```
+
+Backend readiness:
+
+```bash
+curl -sS \
+  https://launchpad.christineadelusi.com/health/ready
+```
+
+Expected readiness:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": "ok"
+  }
+}
+```
+
+---
+
+## 43. End-to-End Functional Validation
+
+The deployed development environment has been validated through a complete
+application workflow.
+
+Validated behavior includes:
+
+- frontend available over HTTPS;
+- user authentication;
+- environment creation;
+- deployment-request submission;
+- API returning `202 Accepted`;
+- worker discovering queued requests;
+- worker processing requests;
+- deployment requests reaching `succeeded`;
+- backend remaining healthy;
+- database remaining reachable;
+- Argo CD remaining `Synced` and `Healthy`.
+
+This provides functional evidence beyond infrastructure-only validation.
+
+---
+
+## 44. Jenkins AWS Permissions
+
+Jenkins AWS access should be scoped to delivery requirements.
+
+Allowed capabilities may include:
+
+- ECR authentication;
+- image upload;
+- image metadata inspection;
+- controlled role assumption.
+
+Jenkins should not receive permissions for unrelated infrastructure.
+
+Terraform uses a separate provisioning authority.
+
+---
+
+## 45. CI Credential Handling
+
+Pipeline secrets may include:
+
+- AWS role-assumption credentials or identity context;
+- GitHub credentials;
+- GitOps repository credential;
+- scanning-service credentials;
+- notification credentials.
+
+Requirements:
+
+- Jenkins credential management;
+- stage-scoped injection;
+- no credentials in Jenkinsfiles;
+- no secrets in logs;
+- shell tracing disabled around sensitive operations where required;
+- credentials rotated when compromised.
+
+---
+
+## 46. GitHub Security Controls
+
+Recommended repository controls include:
+
+- protected `main`;
+- required pull requests;
+- required CI checks;
+- review requirements;
+- restricted force push;
+- secret scanning;
+- dependency alerts.
+
+Sensitive delivery changes should receive explicit review.
+
+Examples:
+
+- Jenkinsfile changes;
+- Terraform changes;
+- IAM changes;
+- GitOps changes;
+- Argo CD configuration;
+- secret-delivery changes.
+
+---
+
+## 47. Branching Strategy
+
+A practical branching model may include:
 
 ```text
 main
-develop
 feature/*
 bugfix/*
 hotfix/*
 release/*
 ```
 
-### `main`
+A separate `develop` branch may be used if release management requires it.
 
-Represents approved, release-quality application code.
+The current repository workflow may remain simpler where a smaller portfolio
+team does not benefit from maintaining unnecessary long-lived branches.
 
-Controls:
-
-- Protected branch
-- No direct pushes
-- Pull request required
-- Required CI checks
-- Review required
-- Force pushes disabled
-
-### `develop`
-
-Integration branch for completed feature work before release promotion.
-
-Controls:
-
-- Pull request required
-- CI validation required
-- Direct pushes discouraged or disabled
-
-### Feature Branches
-
-Examples:
-
-```text
-feature/authentication
-feature/environment-api
-feature/frontend-dashboard
-feature/worker-provisioning
-```
-
-Feature branches merge into `develop`.
-
-### Release Branches
-
-Example:
-
-```text
-release/1.0.0
-```
-
-Release branches support:
-
-- Final validation
-- Release notes
-- Version selection
-- Controlled merge into `main`
-
-### Hotfix Branches
-
-Example:
-
-```text
-hotfix/login-token-validation
-```
-
-Hotfix branches originate from `main` and are merged back into both `main` and `develop`.
+Branching complexity should match actual collaboration needs.
 
 ---
 
-## 7. Pull Request Workflow
+## 48. Pipeline Concurrency
 
-A typical feature workflow is:
+Concurrent delivery operations require control.
 
-1. Developer creates a feature branch.
-2. Developer commits a focused change.
-3. Developer pushes the branch.
-4. Developer opens a pull request.
-5. Jenkins runs pull-request validation.
-6. Required checks complete.
-7. Reviewer evaluates code and design impact.
-8. Required changes are addressed.
-9. Pull request is approved.
-10. Pull request merges into `develop`.
-11. Integration pipeline runs.
-12. A release process promotes approved code into `main`.
+Risks include:
 
-Required pull-request checks should include:
+- simultaneous GitOps updates;
+- multiple releases modifying the same overlay;
+- concurrent Terraform applies;
+- duplicate image publication.
 
-- Formatting
-- Linting
-- Unit tests
-- API contract validation
-- Dependency scanning
-- Secret scanning
-- Static analysis
-- Dockerfile validation where applicable
+Controls may include:
+
+- Jenkins pipeline locking;
+- branch protection;
+- Terraform remote-state locking;
+- serialized environment promotion;
+- pull-request-based GitOps changes.
 
 ---
 
-## 8. Jenkins Pipeline Types
-
-Platform Launchpad will use several logical pipelines.
-
-### Pull Request Validation Pipeline
-
-Triggered by:
-
-- Pull request opened
-- Pull request updated
-- Pull request reopened
-
-Responsibilities:
-
-- Checkout
-- Dependency installation
-- Formatting validation
-- Linting
-- Unit tests
-- API contract validation
-- Secret scanning
-- Dependency scanning
-- Static analysis
-- Optional test container build
-
-This pipeline does not publish release images.
-
-### Integration Pipeline
-
-Triggered by:
-
-- Merge into `develop`
-
-Responsibilities:
-
-- Full backend test suite
-- Full frontend test suite
-- Worker tests
-- Integration tests
-- Docker image builds
-- Container scanning
-- Publish development images
-- Update development GitOps overlay
-
-### Release Pipeline
-
-Triggered by:
-
-- Merge into `main`
-- Approved release tag
-- Manual controlled release request
-
-Responsibilities:
-
-- Validate release metadata
-- Run required tests
-- Build or resolve the approved immutable artifact
-- Publish semantic-version tags
-- Capture image digests
-- Update staging GitOps overlay
-- Wait for optional approval
-- Update production-style overlay
-- Record release metadata
-
-### Infrastructure Pipeline
-
-Triggered separately for Terraform code.
-
-Responsibilities:
-
-- `terraform fmt -check`
-- `terraform init`
-- `terraform validate`
-- Security scanning
-- Terraform plan
-- Manual approval
-- Terraform apply
-
-Infrastructure pipelines remain separate from application image delivery.
-
----
-
-## 9. Pipeline Stage Design
-
-The main Jenkins application pipeline includes the following stages.
-
-### Stage 1: Checkout
-
-Responsibilities:
-
-- Check out the approved repository and branch.
-- Record the Git commit SHA.
-- Prevent builds from untrusted repository origins.
-- Clean the workspace where required.
-
-Captured metadata:
-
-- Repository
-- Branch
-- Commit SHA
-- Pull request number
-- Build number
-- Triggering user
-
-### Stage 2: Validate Repository Structure
-
-Checks:
-
-- Required files exist.
-- Required directories exist.
-- Dockerfiles exist where expected.
-- OpenAPI document exists.
-- No forbidden files are committed.
-- `.env` is not tracked.
-- Terraform state files are not tracked.
-
-### Stage 3: Backend Dependency Installation
-
-The backend stage installs dependencies from the committed dependency definition.
-
-The final implementation should prefer a deterministic lock strategy.
-
-Checks:
-
-- Dependency resolution succeeds.
-- No unapproved package source is used.
-- Installed dependencies match the committed project files.
-
-### Stage 4: Frontend Dependency Installation
-
-The frontend uses a committed lock file.
-
-The pipeline should use a deterministic installation command such as:
-
-```text
-npm ci
-```
-
-rather than updating the dependency graph during CI.
-
-### Stage 5: Formatting and Linting
-
-Backend checks may include:
-
-- Ruff
-- Black check mode
-- Import ordering
-- Type checking
-
-Frontend checks may include:
-
-- ESLint
-- TypeScript compiler
-- Prettier check mode
-
-Formatting failures block the pipeline.
-
-### Stage 6: Unit Tests
-
-Backend tests cover:
-
-- Authentication
-- Authorization
-- Services
-- Models
-- Lifecycle rules
-- Validation
-
-Frontend tests cover:
-
-- Components
-- Forms
-- Role-aware navigation
-- Error states
-- Status rendering
-
-Worker tests cover:
-
-- Task validation
-- State transitions
-- Retry behavior
-- Idempotency
-
-### Stage 7: API Contract Validation
-
-Validate:
-
-- `docs/api/openapi.yaml` parses successfully.
-- OpenAPI version is supported.
-- References resolve.
-- Required paths exist.
-- Implemented routes match the approved contract.
-- Generated FastAPI schema does not drift unexpectedly.
-
-Contract drift should fail CI after implementation begins.
-
-### Stage 8: Integration Tests
-
-Integration tests may use Docker Compose to start:
-
-- PostgreSQL
-- Redis
-- Backend
-- Worker
-
-Tests cover:
-
-- Database migrations
-- Registration and login
-- Environment creation
-- Deployment request creation
-- Worker lifecycle processing
-- Environment destruction
-- Audit event creation
-
-### Stage 9: Static Analysis
-
-Planned static-analysis tools may include:
-
-- SonarQube
-- Python security analysis
-- TypeScript analysis
-- Infrastructure linters
-
-Required quality gates may include:
-
-- No new blocker issues
-- No new critical issues
-- Required code coverage
-- No unresolved secret findings
-
-### Stage 10: Dependency Security Scan
-
-Scan:
-
-- Python dependencies
-- Node.js dependencies
-- Container base-image dependencies
-
-Critical vulnerabilities should block release unless a documented exception exists.
-
-### Stage 11: Secret Scan
-
-Scan Git changes and repository history where appropriate for:
-
-- AWS keys
-- Tokens
-- Passwords
-- Private keys
-- Connection strings
-- JWT secrets
-
-Any verified secret requires:
-
-1. Pipeline failure
-2. Secret revocation
-3. Repository cleanup where required
-4. Security review
-
-### Stage 12: Build Container Images
-
-Images:
-
-- Platform Launchpad frontend
-- Platform Launchpad backend
-- Platform Launchpad worker
-
-Requirements:
-
-- Reproducible Dockerfiles
-- Multi-stage builds where useful
-- Minimal runtime dependencies
-- Non-root execution where practical
-- No `.env`
-- No Git history
-- No credentials
-- Build metadata labels
-
-### Stage 13: Container Image Scan
-
-Scan each image before publication.
-
-Policy:
-
-- Critical vulnerabilities block publication.
-- High vulnerabilities require remediation or documented review.
-- Findings are retained as pipeline artifacts.
-
-### Stage 14: Authenticate to Amazon ECR
-
-Jenkins assumes a least-privilege AWS role.
-
-The role permits only the required ECR operations and related metadata reads.
-
-Long-lived IAM user keys should not be used when role-based access is available.
-
-### Stage 15: Publish Container Images
-
-Each service image is published using immutable identifiers.
-
-Example tags:
-
-```text
-backend:sha-667f679
-backend:build-142
-backend:1.0.0
-```
-
-Equivalent frontend and worker tags are published.
-
-The pipeline records the resulting image digest.
-
-### Stage 16: Update GitOps Repository
-
-Jenkins updates the approved environment overlay.
-
-Example desired state:
-
-```yaml
-images:
-  - name: platform-launchpad-backend
-    newName: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-backend
-    digest: sha256:example
-```
-
-The GitOps commit includes:
-
-- Application repository
-- Source commit
-- Jenkins build
-- Image digest
-- Target environment
-
-### Stage 17: Argo CD Reconciliation
-
-Argo CD detects the GitOps repository change and reconciles it into EKS.
-
-Jenkins does not invoke direct application deployment commands.
-
-### Stage 18: Post-Deployment Verification
-
-Verification may include:
-
-- Argo CD application health
-- Kubernetes rollout health
-- API readiness endpoint
-- Frontend availability
-- Basic smoke tests
-- Error-rate check
-- Alert status
-
-### Stage 19: Notification
-
-Notifications include:
-
-- Pipeline result
-- Branch
-- Commit
-- Build number
-- Failed stage
-- Image versions
-- Target environment
-- GitOps commit
-- Deployment health
-
-Slack is the initial notification channel.
-
----
-
-## 10. Artifact Versioning
-
-Platform Launchpad uses several identifiers.
-
-### Git Commit Tag
-
-Example:
-
-```text
-sha-667f679
-```
-
-Provides direct source traceability.
-
-### Jenkins Build Tag
-
-Example:
-
-```text
-build-142
-```
-
-Provides pipeline traceability.
-
-### Semantic Version
-
-Example:
-
-```text
-1.0.0
-```
-
-Used for approved releases.
-
-### Image Digest
-
-Example:
-
-```text
-sha256:1234567890abcdef
-```
-
-The digest is the authoritative immutable identifier.
-
-Human-readable tags must not be treated as the final trust anchor.
-
----
-
-## 11. Image Repository Strategy
-
-Planned ECR repositories:
-
-```text
-platform-launchpad-frontend
-platform-launchpad-backend
-platform-launchpad-worker
-```
-
-Repository controls:
-
-- Encryption at rest
-- Image scanning
-- Lifecycle policies
-- Restricted push permissions
-- Read permissions limited to approved workloads
-- Immutable tags where supported
-- Cross-account access only when explicitly required
-
-Lifecycle policies should retain:
-
-- Active release images
-- Recent development images
-- Images referenced by GitOps
-- A defined rollback window
-
----
-
-## 12. Environment Promotion
-
-Environment sequence:
-
-```text
-Development → Staging → Production-Style Demo
-```
-
-### Development Promotion
-
-Triggered automatically after successful integration checks.
-
-The pipeline updates the development GitOps overlay.
-
-### Staging Promotion
-
-Triggered after:
-
-- Release candidate approval
-- Full test completion
-- Container scan approval
-- Development verification
-
-Staging uses the same image digest built earlier.
-
-### Production-Style Promotion
-
-Requires:
-
-- Approved release
-- Staging verification
-- Manual approval
-- Confirmed rollback target
-- Confirmed infrastructure availability
-- Cost-awareness check where AWS resources are temporary
-
-The production-style deployment may be created only for demonstrations.
-
----
-
-## 13. Approval Gates
-
-Manual approval is appropriate for:
-
-- Terraform apply to shared environments
-- Production-style GitOps promotion
-- Destructive infrastructure operations
-- Database-destructive migrations
-- Emergency status overrides
-- Security exception approval
-
-Approval information should include:
-
-- Source commit
-- Image digest
-- Test results
-- Scan results
-- Terraform plan where applicable
-- Target environment
-- Rollback version
-
----
-
-## 14. Database Migration Delivery
-
-Alembic manages database migrations.
-
-Requirements:
-
-- Migration files are committed.
-- CI validates the migration chain.
-- Migrations are tested against a clean database.
-- Migrations are tested against the previous supported schema.
-- Production migrations should be backward-compatible where practical.
-- Destructive migrations require approval and backup verification.
-
-Recommended production pattern:
-
-1. Deploy migration-compatible application code.
-2. Apply backward-compatible migration.
-3. Complete data transition.
-4. Remove deprecated fields in a later release.
-
-Application startup should not silently alter production schemas.
-
----
-
-## 15. Secrets in CI/CD
-
-Secrets may include:
-
-- GitHub credentials
-- ECR access role
-- GitOps repository credential
-- Slack token
-- SonarQube token
-- Registry credentials
-
-Requirements:
-
-- Store credentials in Jenkins credential management.
-- Inject credentials only into required stages.
-- Mask credential output.
-- Prevent shell tracing around secret use.
-- Never place secrets in Jenkinsfiles.
-- Never commit credentials to Git.
-- Rotate credentials after suspected exposure.
-
----
-
-## 16. Jenkins AWS Permissions
-
-The Jenkins application-delivery role may require permission to:
-
-- Authenticate to ECR
-- Push image layers
-- Publish image manifests
-- Read repository metadata
-
-It should not automatically receive permission to:
-
-- Administer EKS
-- Modify RDS
-- Change IAM policies
-- Destroy VPC resources
-- Access unrelated ECR repositories
-
-Terraform uses a separate controlled role.
-
----
-
-## 17. GitOps Commit Strategy
-
-A GitOps update should create a small, explicit commit.
-
-Example:
-
-```text
-deploy(dev): promote backend to sha256:1234...
-```
-
-Commit metadata should include:
-
-```text
-Application commit: 667f679
-Jenkins build: 142
-Image digest: sha256:1234...
-Environment: development
-```
-
-GitOps pull requests may be required for staging and production-style promotions.
-
----
-
-## 18. Rollback Strategy
-
-### Application Rollback
-
-Rollback steps:
-
-1. Identify a known-good image digest.
-2. Revert the GitOps commit or create a corrective commit.
-3. Argo CD reconciles the previous desired state.
-4. Verify application readiness and health.
-5. Confirm error rates return to acceptable levels.
-6. Record the incident and rollback.
-
-### Database Rollback
-
-Database rollback is treated separately.
-
-Options include:
-
-- Forward-fix migration
-- Backward-compatible application rollback
-- Explicit Alembic downgrade when proven safe
-- RDS snapshot restoration for severe failures
-
-Application rollback must not assume that every database migration is safely reversible.
-
-### Infrastructure Rollback
-
-Infrastructure changes use:
-
-- Terraform plan review
-- Git revert
-- Corrective Terraform apply
-- State recovery procedures
-- Backups where applicable
-
----
-
-## 19. Failure Handling
-
-### Test Failure
-
-- Stop pipeline.
-- Do not build release images.
-- Publish test reports.
-- Notify the author.
-
-### Security Scan Failure
-
-- Stop publication.
-- Retain scan report.
-- Require remediation or an approved exception.
-
-### Image Build Failure
-
-- Stop publication.
-- Retain build logs.
-- Do not update GitOps.
-
-### ECR Push Failure
-
-- Retry transient failures where appropriate.
-- Do not update GitOps unless all required images are available.
-
-### GitOps Update Failure
-
-- Application image may remain in ECR.
-- Runtime state remains unchanged.
-- Notify the platform team.
-
-### Argo CD Sync Failure
-
-- Preserve Git desired state.
-- Surface application health.
-- Investigate manifest, policy, image, or runtime failure.
-- Revert GitOps state where required.
-
-### Smoke Test Failure
-
-- Mark deployment unhealthy.
-- Prevent promotion.
-- Consider automatic or manual rollback.
-
----
-
-## 20. Pipeline Concurrency
-
-Controls should prevent:
-
-- Two builds overwriting the same mutable tag
-- Conflicting GitOps updates
-- Concurrent production promotions
-- Concurrent Terraform applies against the same state
-- Duplicate database migrations
-
-Possible controls include:
-
-- Jenkins pipeline locking
-- Environment-specific locks
-- Git pull-request serialization
-- DynamoDB Terraform state locking
-- Immutable image identifiers
-
----
-
-## 21. Pipeline Artifacts
-
-Retained pipeline artifacts may include:
-
-- Test reports
-- Coverage reports
-- Lint reports
-- Static-analysis results
-- Dependency scan reports
-- Container scan reports
-- SBOMs
-- Terraform plans
-- Release metadata
-- Image digest manifests
-- Smoke-test results
+## 49. Pipeline Artifacts
+
+Useful retained pipeline evidence may include:
+
+- test reports;
+- coverage reports;
+- dependency scans;
+- container scans;
+- static-analysis reports;
+- Terraform plans;
+- release metadata;
+- image digest manifests.
 
 Artifacts must not contain secrets.
 
-Retention periods should balance auditability and storage cost.
-
 ---
 
-## 22. Notifications
+## 50. Release Metadata
 
-Initial Slack notifications should cover:
-
-- Pull-request validation failure
-- Integration pipeline failure
-- Release success
-- Release failure
-- Security gate failure
-- GitOps update
-- Argo CD health failure
-- Terraform approval request
-
-Notification messages should include enough context to identify the build without exposing secrets.
-
----
-
-## 23. Observability for CI/CD
-
-Pipeline metrics should include:
-
-- Pipeline success rate
-- Pipeline failure rate
-- Mean build duration
-- Stage duration
-- Test failure frequency
-- Security gate failures
-- Image-build duration
-- Deployment frequency
-- Deployment success rate
-- Rollback count
-- Lead time for change
-- Mean time to recovery
-
-These metrics support DORA-style delivery analysis.
-
----
-
-## 24. Local CI Simulation
-
-Developers should be able to run major validation checks locally.
-
-Examples:
-
-```text
-make lint
-make test
-make validate-openapi
-make build
-make integration-test
-```
-
-The exact task runner may be defined during implementation.
-
-Local checks improve feedback speed but do not replace Jenkins validation.
-
----
-
-## 25. Jenkinsfile Structure
-
-The initial pipeline may use repository-scoped Jenkinsfiles.
-
-Planned structure:
-
-```text
-jenkins/
-├── Jenkinsfile.pr
-├── Jenkinsfile.integration
-├── Jenkinsfile.release
-├── Jenkinsfile.terraform
-└── scripts/
-```
-
-A Jenkins Shared Library may be introduced when reusable patterns stabilize.
-
-Shared-library candidates include:
-
-- AWS role assumption
-- Slack notification
-- Container scanning
-- ECR publication
-- GitOps update
-- Terraform validation
-- Approval gates
-
----
-
-## 26. Build Agent Requirements
-
-Jenkins agents may require:
-
-- Git
-- Python
-- Node.js
-- Docker or an approved image builder
-- AWS CLI
-- Terraform
-- Security scanners
-- YAML and OpenAPI validation tools
-
-Build agents should be:
-
-- Ephemeral where practical
-- Isolated
-- Reproducible
-- Updated regularly
-- Restricted from unrelated production access
-
----
-
-## 27. Protected Change Categories
-
-The following changes require explicit review:
-
-- Authentication
-- Authorization
-- Password handling
-- JWT logic
-- Database migrations
-- Jenkinsfiles
-- Terraform
-- IAM policies
-- Kubernetes RBAC
-- Argo CD configuration
-- Secrets integration
-- Container base images
-- Security scanning policy
-
-CODEOWNERS may later enforce review for sensitive paths.
-
----
-
-## 28. Release Metadata
-
-Each approved release should produce metadata similar to:
+A release record may include:
 
 ```json
 {
-  "version": "1.0.0",
-  "source_commit": "667f679",
+  "source_commit": "abcdef1",
   "jenkins_build": 142,
-  "frontend_digest": "sha256:frontend-example",
-  "backend_digest": "sha256:backend-example",
-  "worker_digest": "sha256:worker-example",
-  "gitops_commit": "abc1234",
-  "created_at": "2026-07-11T18:30:00Z"
+  "frontend_digest": "sha256:...",
+  "backend_digest": "sha256:...",
+  "worker_digest": "sha256:...",
+  "gitops_commit": "1234567",
+  "environment": "development"
 }
 ```
 
-This metadata may be stored as a pipeline artifact and included in release notes.
+This metadata can support:
+
+- release notes;
+- incident investigation;
+- rollback;
+- auditability.
 
 ---
 
-## 29. CI/CD Security Controls
+## 51. Notifications
 
-Required controls include:
+CI/CD notifications may include:
 
-- Protected branches
-- Pull-request review
-- Required Jenkins checks
-- Secret scanning
-- Dependency scanning
-- Static analysis
-- Container scanning
-- Least-privilege Jenkins credentials
-- No unrestricted cluster credentials
-- Immutable artifacts
-- Audit-friendly GitOps commits
-- Approval gates for sensitive changes
-- Credential masking
-- Build-log review
-- Build-agent isolation
+- pipeline result;
+- branch;
+- source commit;
+- Jenkins build;
+- failed stage;
+- image digest;
+- GitOps commit;
+- Argo CD health;
+- target environment.
+
+Notification payloads must avoid secrets.
+
+Slack is an appropriate initial notification channel.
 
 ---
 
-## 30. Known MVP Limitations
+## 52. Deployment Metrics
 
-The first implementation may not include:
+Useful pipeline and delivery metrics include:
 
-- Full ephemeral Jenkins agents
-- Artifact signing
-- Provenance attestations
-- SBOM enforcement
-- Admission policies
-- Automated canary analysis
-- Automated rollback
-- Multi-region promotion
-- Formal change-management integration
+- pipeline success rate;
+- pipeline failure rate;
+- average pipeline duration;
+- build frequency;
+- deployment frequency;
+- deployment success rate;
+- rollback count;
+- failed migration count;
+- Argo CD sync failures;
+- mean recovery time.
 
-These are future hardening opportunities.
+These metrics support future DORA-style delivery analysis.
 
 ---
 
-## 31. CI/CD Acceptance Criteria
+## 53. Infrastructure Pipeline
 
-The CI/CD design is complete when:
+Terraform delivery is separated from application delivery.
 
-- Source-control responsibilities are documented.
-- Branching and pull-request workflows are defined.
-- Jenkins pipeline types are defined.
-- Pipeline stages are documented.
-- Test and security gates are defined.
-- Container publication is defined.
-- Image versioning and digest use are defined.
-- Jenkins and Argo CD responsibilities are separated.
-- GitOps updates are documented.
-- Environment promotion is documented.
-- Approval gates are documented.
-- Database migration delivery is documented.
-- Rollback procedures are documented.
-- Pipeline failure handling is documented.
-- Credential handling is documented.
-- Pipeline metrics are identified.
-- Known MVP limitations are documented.
+Typical infrastructure pipeline:
+
+```text
+Checkout
+   |
+   v
+terraform fmt -check
+   |
+   v
+terraform init
+   |
+   v
+terraform validate
+   |
+   v
+Security Validation
+   |
+   v
+terraform plan
+   |
+   v
+Approval
+   |
+   v
+terraform apply
+```
+
+A final:
+
+```bash
+terraform plan
+```
+
+can be used to confirm zero drift after application.
+
+---
+
+## 54. Terraform Plan Safety
+
+For higher-risk infrastructure changes:
+
+```bash
+terraform plan \
+  -out=platform.tfplan
+```
+
+The saved plan should be reviewed before:
+
+```bash
+terraform apply platform.tfplan
+```
+
+Unexpected:
+
+```text
+replace
+destroy
+```
+
+actions should stop automated application until reviewed.
+
+---
+
+## 55. Terraform Import and Adoption
+
+Pre-existing infrastructure should not remain permanently unmanaged.
+
+Platform Launchpad has used:
+
+```text
+terraform import
+```
+
+to bring existing Argo CD ECR repositories under Terraform ownership.
+
+The adoption workflow is:
+
+```text
+Existing Resource
+    |
+    v
+Declare in Terraform
+    |
+    v
+Import
+    |
+    v
+Plan
+    |
+    v
+Reconcile
+    |
+    v
+Zero Drift
+```
+
+---
+
+## 56. Argo CD and Terraform Ownership Boundary
+
+Terraform and Argo CD intentionally manage different resource classes.
+
+Terraform manages:
+
+```text
+AWS infrastructure
+IAM
+EKS
+RDS
+Redis
+ECR
+Networking
+Secrets Manager
+VPC Endpoints
+```
+
+Argo CD manages:
+
+```text
+Deployments
+Services
+Ingress
+Migration Jobs
+ServiceAccounts
+SecretProviderClass
+AWS Load Balancer Controller runtime
+```
+
+Avoiding shared ownership prevents reconciliation conflicts.
+
+---
+
+## 57. Secrets in GitOps
+
+The GitOps repository must not contain plaintext runtime secret values.
+
+Instead:
+
+```text
+AWS Secrets Manager
+        |
+        v
+Secrets Store CSI Driver
+        |
+        v
+SecretProviderClass
+        |
+        v
+Workload Files
+```
+
+GitOps stores secret references and configuration, not secret values.
+
+---
+
+## 58. Runtime Workload Identity
+
+AWS access from Kubernetes uses EKS Pod Identity.
+
+Workloads such as:
+
+```text
+backend
+worker
+aws-load-balancer-controller
+```
+
+receive dedicated AWS permissions without embedded static access keys.
+
+This keeps runtime identity separate from Jenkins and Terraform credentials.
+
+---
+
+## 59. Security Context in Delivery
+
+GitOps manifests enforce workload security settings.
+
+Examples include:
+
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+```
+
+Container security is therefore part of desired state and code review.
+
+---
+
+## 60. Ingress Delivery
+
+Ingress is managed through GitOps.
+
+The development application exposes:
+
+```text
+launchpad.christineadelusi.com
+```
+
+routing:
+
+```text
+/               -> frontend
+/api            -> backend
+/docs           -> backend
+/redoc          -> backend
+/openapi.json   -> backend
+/health         -> backend
+```
+
+The Ingress includes AWS Load Balancer Controller annotations for:
+
+- internet-facing ALB;
+- IP target type;
+- HTTP listener;
+- HTTPS listener;
+- ACM certificate;
+- HTTP-to-HTTPS redirect.
+
+---
+
+## 61. TLS Delivery Boundary
+
+ACM certificate resources exist outside the GitOps repository.
+
+GitOps references the approved certificate through the Ingress configuration.
+
+The delivery model therefore distinguishes:
+
+```text
+Certificate lifecycle
+    |
+    v
+AWS / external infrastructure ownership
+
+Ingress certificate reference
+    |
+    v
+GitOps ownership
+```
+
+---
+
+## 62. DNS Delivery Boundary
+
+Route 53 DNS exists in a separate AWS development account.
+
+The DNS record points the public hostname to the runtime ALB.
+
+DNS is therefore an external integration dependency rather than a normal
+application deployment artifact.
+
+A production CI/CD pipeline should not receive permission to modify unrelated
+shared DNS zones unless explicitly required.
+
+---
+
+## 63. Argo CD Administrative Access
+
+Argo CD administrative access is operational, not application-facing.
+
+During development, access may be performed through:
+
+```bash
+kubectl port-forward \
+  svc/argocd-server \
+  -n argocd \
+  8080:443
+```
+
+This avoids requiring a separate public Argo CD endpoint for routine
+development administration.
+
+A longer-lived production environment should consider SSO and a dedicated
+access model.
+
+---
+
+## 64. Delivery Recovery
+
+The platform recovery sequence is:
+
+```text
+Terraform Apply
+      |
+      v
+AWS Foundation
+      |
+      v
+Argo CD Bootstrap
+      |
+      v
+GitOps Application Bootstrap
+      |
+      v
+Argo CD Reconciliation
+      |
+      v
+Database Migration
+      |
+      v
+Application Runtime
+```
+
+Representative commands:
+
+```bash
+terraform apply
+```
+
+then:
+
+```bash
+./bootstrap/argocd/install.sh
+./bootstrap/argocd/apply-applications.sh
+```
+
+---
+
+## 65. Cost-Aware Delivery
+
+The development environment is intentionally temporary.
+
+CI/CD design therefore assumes the environment may be unavailable between
+demonstrations.
+
+Delivery configuration must survive environment destruction.
+
+Persistent delivery assets include:
+
+- source repository;
+- GitOps repository;
+- Terraform;
+- Jenkins configuration;
+- private ECR artifacts where retained;
+- bootstrap automation;
+- documentation.
+
+This makes reproducible delivery part of cost management.
+
+---
+
+## 66. Teardown Considerations
+
+Before destroying the AWS development environment:
+
+- confirm source changes are pushed;
+- confirm GitOps changes are pushed;
+- capture screenshots;
+- capture Argo CD health evidence;
+- capture Terraform zero-drift evidence;
+- decide which ECR artifacts must remain;
+- decide database snapshot requirements;
+- verify Route 53 ownership;
+- verify ACM ownership;
+- review Terraform destroy plan.
+
+After destroy:
+
+- check for orphaned ALBs;
+- check NAT Gateway removal;
+- check EKS removal;
+- check worker-node removal;
+- check RDS/Redis status;
+- check VPC endpoints;
+- check unnecessary ECR storage.
+
+---
+
+## 67. Implemented vs Planned Delivery Features
+
+### Implemented and Validated
+
+```text
+GitHub source control
+Application repository
+Separate GitOps repository
+Private ECR application repository
+Private controller ECR
+Private Argo CD bootstrap ECR
+Immutable image digests
+Argo CD
+GitOps application reconciliation
+AWS Load Balancer Controller via Argo CD
+Database migration Sync hook
+Kustomize development overlay
+Secrets Store CSI configuration
+HTTPS ingress
+Terraform infrastructure
+Argo CD bootstrap
+GitOps Application bootstrap
+End-to-end worker processing
+Terraform zero-drift validation
+```
+
+### Designed / Future
+
+```text
+Full automated PR Jenkins pipeline
+Full automated release pipeline
+Staging environment promotion
+Production environment promotion
+Automated rollback
+Image signing
+SBOM generation
+Provenance attestations
+Admission-time signature verification
+Automated release metadata publication
+DORA metric dashboards
+```
+
+Future features should not be presented as currently deployed until they are
+implemented and validated.
+
+---
+
+## 68. CI/CD Architecture Evolution
+
+The delivery architecture evolved during implementation.
+
+### Original Design
+
+The initial design assumed:
+
+- separate ECR repositories for frontend, backend, and worker;
+- multiple long-lived environments;
+- broader automated pipeline coverage;
+- Redis-backed worker queue;
+- Argo CD as a future milestone.
+
+### Current Implementation
+
+The current development environment uses:
+
+- one primary application ECR repository;
+- immutable image digests;
+- database-backed worker polling;
+- deployed Amazon EKS;
+- deployed Argo CD;
+- GitOps-managed application workloads;
+- GitOps-managed AWS Load Balancer Controller;
+- Argo CD migration hooks;
+- private Argo CD runtime images;
+- reproducible platform bootstrap.
+
+The delivery principles remain the same even where implementation details
+evolved.
+
+---
+
+## 69. Senior Platform Engineering Principles Demonstrated
+
+This CI/CD architecture demonstrates:
+
+- separation of CI and CD;
+- pull-based GitOps;
+- immutable artifact promotion;
+- private artifact storage;
+- declarative runtime state;
+- infrastructure/runtime ownership separation;
+- controlled database migrations;
+- workload identity;
+- secure secret delivery;
+- reproducible cluster bootstrap;
+- Git-based rollback;
+- delivery traceability;
+- failure visibility;
+- cost-aware environment lifecycle;
+- drift detection;
+- platform recovery automation.
+
+---
+
+## 70. Summary
+
+Platform Launchpad uses a deliberate delivery boundary:
+
+```text
+Application Source
+      |
+      v
+Jenkins CI
+      |
+      +---- Test
+      +---- Scan
+      +---- Build
+      |
+      v
+Private Amazon ECR
+      |
+      v
+Immutable Image Digest
+      |
+      v
+GitOps Repository
+      |
+      v
+Argo CD
+      |
+      +---- Database Migration Hook
+      |
+      v
+Amazon EKS
+```
+
+Terraform owns AWS infrastructure.
+
+Jenkins owns continuous integration and artifact publication.
+
+Git owns Kubernetes desired state.
+
+Argo CD owns runtime reconciliation.
+
+ECR owns immutable container artifacts.
+
+The resulting model avoids granting the CI system direct deployment authority
+over application workloads and provides a clear, auditable, recoverable
+software delivery path.

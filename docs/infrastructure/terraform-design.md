@@ -2,306 +2,365 @@
 
 ## 1. Purpose
 
-This document defines the Terraform and AWS infrastructure architecture for Platform Launchpad.
+This document describes the as-built Terraform and AWS infrastructure
+architecture for Platform Launchpad.
 
-The production-style portfolio deployment will use Terraform to provision and manage:
+Terraform is the authoritative provisioning layer for the AWS runtime
+foundation. It creates the network, compute, data, identity, registry,
+secret-management, and platform prerequisites required before GitOps can
+reconcile Kubernetes workloads.
 
-- Terraform remote state
-- Amazon VPC
-- Public and private subnets
-- Route tables and network boundaries
-- Security groups
-- Amazon ECR
-- Amazon EKS
-- Amazon RDS for PostgreSQL
-- AWS Secrets Manager
-- Application Load Balancer integration
-- Route 53
-- ACM certificates
-- IAM roles and policies
-- CloudWatch integration
-- Cost-control resources
+The infrastructure is intentionally designed for:
 
-The design supports reproducibility, controlled deployment, teardown, and interview demonstration.
+- reproducibility;
+- environment isolation;
+- least-privilege access;
+- private application networking;
+- private data services;
+- GitOps delivery;
+- deterministic recovery;
+- drift detection;
+- controlled teardown;
+- portfolio and interview demonstrations.
 
----
+The authoritative application and Kubernetes topology is documented in:
 
-## 2. Infrastructure Objectives
-
-The infrastructure must:
-
-- Be fully reproducible through Terraform.
-- Separate application workloads from public network exposure.
-- Keep PostgreSQL private.
-- use least-privilege IAM roles.
-- Support GitOps deployment through Argo CD.
-- Support secure container publication through Amazon ECR.
-- Support TLS and custom DNS.
-- Store Terraform state remotely.
-- Support environment-specific configuration.
-- Allow safe teardown to control cost.
-- Avoid undocumented manual console changes.
-- Preserve required state and database backups when appropriate.
-- Produce outputs needed by Jenkins, Argo CD, and application configuration.
-
----
-
-## 3. Infrastructure Principles
-
-### 3.1 Infrastructure as Code Is Authoritative
-
-AWS resources must be created and changed through Terraform.
-
-Manual console changes are considered drift and should either:
-
-- Be imported into Terraform, or
-- Be reverted.
-
-### 3.2 Remote State Is Required
-
-Terraform state must not be stored only on a developer workstation.
-
-The platform will use:
-
-- Amazon S3 for remote state
-- DynamoDB for state locking
-- Encryption at rest
-- Versioning
-- Restricted IAM access
-
-### 3.3 Environment Isolation
-
-Development, staging, and production-style environments must use separate state files.
-
-Environment isolation may use:
-
-- Separate backend keys
-- Separate AWS accounts in a future design
-- Separate clusters or namespaces depending on cost constraints
-
-### 3.4 Private Data Services
-
-RDS must not be publicly accessible.
-
-Application workloads access PostgreSQL through private networking.
-
-### 3.5 Public Access Terminates at the Load Balancer
-
-The Application Load Balancer is the primary public entry point.
-
-EKS worker nodes and RDS remain in private subnets.
-
-### 3.6 Least-Privilege IAM
-
-Terraform, Jenkins, Kubernetes controllers, and application workloads use distinct IAM roles.
-
-### 3.7 Cost Is a Design Constraint
-
-The complete AWS environment may be created only for demos and interviews.
-
-Teardown must be documented and tested.
-
----
-
-## 4. High-Level AWS Architecture
-
-```mermaid
-flowchart TB
-    USER[Internet User]
-    R53[Route 53]
-    ACM[ACM Certificate]
-    ALB[Application Load Balancer]
-
-    subgraph VPC[Platform Launchpad VPC]
-        subgraph PUBLIC[Public Subnets]
-            ALB
-            NAT[NAT Gateway or Cost-Optimized Egress]
-        end
-
-        subgraph PRIVATE_APP[Private Application Subnets]
-            EKS[Amazon EKS Worker Nodes]
-            FRONTEND[Frontend Pods]
-            BACKEND[Backend Pods]
-            WORKER[Worker Pods]
-            ARGO[Argo CD]
-        end
-
-        subgraph PRIVATE_DATA[Private Database Subnets]
-            RDS[(Amazon RDS PostgreSQL)]
-        end
-    end
-
-    ECR[Amazon ECR]
-    SECRETS[AWS Secrets Manager]
-    CW[CloudWatch]
-    S3[S3 Terraform State]
-    DDB[DynamoDB State Lock]
-
-    USER --> R53
-    R53 --> ALB
-    ACM --> ALB
-    ALB --> FRONTEND
-    ALB --> BACKEND
-
-    EKS --> ECR
-    BACKEND --> RDS
-    WORKER --> RDS
-    BACKEND --> SECRETS
-    WORKER --> SECRETS
-    EKS --> CW
-
-    S3 --> DDB
+```text
+docs/architecture/system-architecture.md
 ```
+
+---
+
+## 2. Current Implementation Status
+
+The AWS development environment has been provisioned and validated.
+
+Implemented Terraform capabilities include:
+
+- Amazon VPC;
+- public subnets across multiple Availability Zones;
+- private application subnets;
+- private database subnets;
+- Internet Gateway;
+- public route table;
+- private application route table;
+- isolated database route table;
+- NAT Gateway;
+- NAT Elastic IP;
+- application, ALB, database, Redis, and endpoint security groups;
+- Amazon EKS;
+- EKS managed node group;
+- EKS access configuration;
+- EKS Pod Identity Agent;
+- EKS Pod Identity associations;
+- Amazon RDS PostgreSQL;
+- Amazon ElastiCache Redis;
+- application Amazon ECR repository;
+- AWS Load Balancer Controller ECR repository;
+- Argo CD bootstrap ECR repositories;
+- Amazon ECR lifecycle policies;
+- AWS Secrets Manager runtime secret;
+- application runtime IAM;
+- worker IAM;
+- CI delivery IAM;
+- AWS Load Balancer Controller IAM;
+- VPC endpoints;
+- EKS-to-RDS network authorization;
+- EKS-to-Redis network authorization;
+- environment outputs required by bootstrap and runtime automation.
+
+The current development environment has also passed:
+
+```text
+terraform plan
+```
+
+with:
+
+```text
+No changes. Your infrastructure matches the configuration.
+```
+
+---
+
+## 3. Infrastructure Ownership Model
+
+Platform Launchpad separates cloud infrastructure ownership from Kubernetes
+runtime ownership.
+
+```text
+Terraform
+    |
+    | AWS infrastructure
+    v
+Amazon EKS
+    |
+    v
+Bootstrap Automation
+    |
+    | installs Argo CD
+    v
+Argo CD
+    |
+    | Kubernetes desired state
+    v
+Application + Platform Workloads
+```
+
+### Terraform Owns
+
+Terraform owns infrastructure such as:
+
+- VPC;
+- subnets;
+- route tables;
+- NAT;
+- EKS;
+- node groups;
+- IAM;
+- Pod Identity;
+- RDS;
+- Redis;
+- ECR;
+- Secrets Manager;
+- VPC endpoints;
+- security groups.
+
+### Bootstrap Automation Owns
+
+Bootstrap automation establishes Argo CD after EKS exists.
+
+### Argo CD Owns
+
+Argo CD owns Kubernetes runtime resources such as:
+
+- application Deployments;
+- Services;
+- Ingress;
+- migration Jobs;
+- SecretProviderClass;
+- AWS Load Balancer Controller.
+
+This avoids overlapping control planes.
+
+---
+
+## 4. Infrastructure Principles
+
+### 4.1 Infrastructure as Code Is Authoritative
+
+AWS infrastructure changes should be represented in Terraform.
+
+Manual resources discovered during implementation should either be:
+
+- imported into Terraform;
+- intentionally retained as an external dependency;
+- removed when no longer required.
+
+The Argo CD ECR repositories demonstrate this approach: they were created
+during platform recovery work and later imported into Terraform ownership.
+
+---
+
+### 4.2 Drift Must Be Detectable
+
+A clean environment should produce:
+
+```text
+No changes. Your infrastructure matches the configuration.
+```
+
+from:
+
+```bash
+terraform plan
+```
+
+Unexpected differences require investigation before a release or teardown.
+
+---
+
+### 4.3 Data Services Remain Private
+
+RDS and Redis are not publicly exposed.
+
+Application workloads reach them through private VPC networking and explicit
+security-group relationships.
+
+---
+
+### 4.4 Public Access Terminates at the Edge
+
+Public application traffic terminates at an AWS Application Load Balancer.
+
+EKS worker nodes, PostgreSQL, and Redis do not require public addresses.
+
+---
+
+### 4.5 Least Privilege
+
+Different identities exist for:
+
+- EKS control plane;
+- EKS worker nodes;
+- application runtime;
+- worker-specific operations;
+- AWS Load Balancer Controller;
+- Jenkins / CI delivery.
+
+Applications do not inherit unrestricted node-role permissions.
+
+---
+
+### 4.6 Cost Is an Architectural Constraint
+
+The development environment is intentionally temporary.
+
+High-cost resources can be destroyed after validation and recreated when
+required.
+
+This makes recovery and rebuild capability part of the architecture rather
+than optional operational documentation.
 
 ---
 
 ## 5. AWS Region
 
-The initial deployment region is:
+The current environment runs in:
 
 ```text
 us-east-1
 ```
 
-Reasons:
-
-- Existing portfolio resources already use this region.
-- Existing Route 53 and ACM workflows align with this region.
-- Existing Jenkins and ECR experience is centered in this region.
-- It simplifies integration with the user's current AWS portfolio.
-
-The region must remain configurable through Terraform variables.
+The region remains represented through Terraform configuration and outputs.
 
 ---
 
 ## 6. Terraform Repository Structure
 
-The initial project may retain Terraform inside the monorepo.
-
-Recommended structure:
+Current Terraform structure:
 
 ```text
 terraform/
 ├── bootstrap/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── providers.tf
-│   └── versions.tf
-│
+├── environments/
+│   └── development/
+│       ├── backend.tf
+│       ├── main.tf
+│       ├── outputs.tf
+│       ├── providers.tf
+│       ├── variables.tf
+│       └── versions.tf
 ├── modules/
-│   ├── networking/
-│   ├── security-groups/
+│   ├── application-runtime-iam/
+│   ├── argocd-ecr/
+│   ├── ci-delivery-iam/
+│   ├── controller-ecr/
 │   ├── ecr/
 │   ├── eks/
-│   ├── rds/
+│   ├── eks-workload-access/
 │   ├── iam/
+│   ├── load-balancer-controller-iam/
+│   ├── networking/
+│   ├── rds/
+│   ├── redis/
 │   ├── secrets/
-│   ├── dns/
-│   ├── certificates/
-│   ├── observability/
-│   └── budgets/
-│
-├── environments/
-│   ├── development/
-│   ├── staging/
-│   └── production/
-│
-├── policies/
-├── scripts/
-└── README.md
+│   ├── security-groups/
+│   └── vpc-endpoints/
+└── policies/
 ```
 
-A future repository split may move infrastructure into:
+The environment layer composes reusable modules rather than declaring the
+entire AWS platform as one monolithic configuration.
+
+---
+
+## 7. Environment Strategy
+
+Supported environment names are designed around:
 
 ```text
-platform-launchpad-infrastructure
+development
+staging
+production
 ```
 
----
-
-## 7. Terraform Bootstrap Layer
-
-The bootstrap layer creates the resources needed before the main infrastructure can use remote state.
-
-Resources:
-
-- S3 state bucket
-- DynamoDB state-lock table
-- Bucket encryption
-- Bucket versioning
-- Public-access blocking
-- Lifecycle rules
-- State-access IAM policy
-
-Example state layout:
+The current AWS implementation is the:
 
 ```text
-platform-launchpad/
-├── development/terraform.tfstate
-├── staging/terraform.tfstate
-└── production/terraform.tfstate
+development
 ```
 
-Bootstrap state may initially be managed locally, then migrated to a dedicated remote backend.
+environment.
+
+Its purpose is:
+
+- integration testing;
+- Kubernetes validation;
+- GitOps validation;
+- platform engineering demonstrations;
+- recovery testing;
+- portfolio evidence collection.
+
+The development environment favors cost-aware settings over full
+production-level redundancy.
 
 ---
 
-## 8. Terraform Backend Design
+## 8. Terraform State
 
-Example backend configuration:
+Terraform state is separated from application source state.
 
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "platform-launchpad-terraform-state"
-    key            = "development/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "platform-launchpad-terraform-locks"
-  }
-}
+Remote state provides:
+
+- shared state location;
+- recovery capability;
+- locking;
+- reduced dependency on a single workstation.
+
+Environment configuration lives under:
+
+```text
+terraform/environments/<environment>/
 ```
 
-Backend values should not be duplicated unnecessarily across environment files.
+State separation prevents development infrastructure changes from implicitly
+modifying another environment.
 
-Backend initialization may use environment-specific backend configuration files.
+Terraform state files and sensitive variable files must not be committed to
+Git.
 
 ---
 
-## 9. Provider and Version Strategy
+## 9. Provider Strategy
 
-Terraform configuration must pin:
+Provider and Terraform versions are constrained in:
 
-- Terraform minimum version
-- AWS provider version range
-- Kubernetes provider version range
-- Helm provider version range
-
-Example:
-
-```hcl
-terraform {
-  required_version = ">= 1.8.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
+```text
+versions.tf
 ```
 
-Provider upgrades require review and validation.
+and provider configuration is maintained independently in:
 
-Lock files must be committed.
+```text
+providers.tf
+```
+
+Provider dependency lock files should remain committed so development and
+automation consume reviewed provider versions.
+
+Provider upgrades require:
+
+1. configuration validation;
+2. Terraform plan review;
+3. resource replacement review;
+4. application validation.
 
 ---
 
 ## 10. Naming Convention
 
-Resource names follow:
+The implemented naming pattern is:
 
 ```text
 platform-launchpad-<environment>-<resource>
@@ -310,1025 +369,1142 @@ platform-launchpad-<environment>-<resource>
 Examples:
 
 ```text
-platform-launchpad-dev-vpc
-platform-launchpad-dev-eks
-platform-launchpad-dev-rds
-platform-launchpad-prod-backend-ecr
+platform-launchpad-development-eks
+platform-launchpad-development-postgres
+platform-launchpad-development-redis
+platform-launchpad-development-application
+platform-launchpad-development-aws-load-balancer-controller
+platform-launchpad-development-argocd
 ```
 
-Required tags:
+Terraform-managed resources also use environment and platform tags to improve
+inventory and cost visibility.
+
+---
+
+## 11. VPC Architecture
+
+The current platform VPC contains three network tiers:
 
 ```text
-Project     = PlatformLaunchpad
-Environment = development
-ManagedBy   = Terraform
-Owner       = PlatformEngineering
-Repository  = platform-launchpad
+Public Subnets
+      |
+      v
+Private Application Subnets
+      |
+      v
+Private Database Subnets
 ```
 
-Optional tags:
+The VPC spans multiple Availability Zones.
+
+Terraform outputs expose:
 
 ```text
-CostCenter
-CreatedBy
-DataClass
-ExpirationDate
+vpc_id
+public_subnet_ids
+private_app_subnet_ids
+private_db_subnet_ids
 ```
 
 ---
 
-## 11. Environment Strategy
+## 12. Public Subnets
 
-Initial environments:
+Public subnets contain edge and outbound-connectivity infrastructure.
 
-- `development`
-- `staging`
-- `production`
+Current responsibilities include:
 
-### Development
+- Application Load Balancer placement;
+- NAT Gateway placement;
+- Internet Gateway routing.
 
-Purpose:
+They carry Kubernetes subnet metadata required by AWS integrations.
 
-- Integration testing
-- GitOps validation
-- Early demonstrations
-
-Characteristics:
-
-- Smaller instance sizes
-- Minimal replicas
-- Reduced retention
-- May use cost-optimized networking
-
-### Staging
-
-Purpose:
-
-- Release-candidate validation
-- Migration testing
-- Deployment testing
-
-Characteristics:
-
-- Production-like configuration
-- Limited uptime
-- Created when required
-
-### Production-Style Demo
-
-Purpose:
-
-- Interviews
-- Portfolio demonstrations
-- Architecture validation
-
-Characteristics:
-
-- TLS
-- Custom domain
-- Controlled promotion
-- Monitoring
-- Backup
-- Manual approval
-- May be torn down when not required
+Application worker nodes do not require placement in these public subnets.
 
 ---
 
-## 12. VPC Design
+## 13. Private Application Subnets
 
-The VPC spans at least two Availability Zones.
+Private application subnets host the EKS worker nodes.
 
-Example CIDR:
+Kubernetes workloads running there include:
+
+- frontend;
+- backend;
+- worker;
+- Argo CD;
+- AWS Load Balancer Controller;
+- supporting cluster services.
+
+These subnets have no direct Internet Gateway route.
+
+Their external access is provided through controlled NAT egress or VPC
+endpoints.
+
+---
+
+## 14. Private Database Subnets
+
+Private database subnets host:
+
+- Amazon RDS PostgreSQL;
+- ElastiCache subnet placement.
+
+They do not receive a general Internet default route.
+
+This creates an additional network boundary between Kubernetes workloads and
+persistent data services.
+
+---
+
+## 15. NAT Gateway
+
+A NAT Gateway is implemented for private application subnet egress.
+
+Terraform manages:
+
+- Elastic IP;
+- NAT Gateway;
+- private application default route.
+
+Conceptually:
 
 ```text
-10.50.0.0/16
+Private Application Subnets
+        |
+        | 0.0.0.0/0
+        v
+NAT Gateway
+        |
+        v
+Internet Gateway
+        |
+        v
+External Services
 ```
 
-Example subnet allocation:
+This became necessary because platform components such as Argo CD require
+access to external Git repositories.
 
-| Subnet Type | Availability Zone | CIDR |
-|---|---|---|
-| Public | us-east-1a | `10.50.0.0/24` |
-| Public | us-east-1b | `10.50.1.0/24` |
-| Private application | us-east-1a | `10.50.10.0/24` |
-| Private application | us-east-1b | `10.50.11.0/24` |
-| Private database | us-east-1a | `10.50.20.0/24` |
-| Private database | us-east-1b | `10.50.21.0/24` |
-
-Actual CIDRs remain configurable.
+The NAT Gateway is one of the primary development cost drivers and should be
+removed during teardown.
 
 ---
 
-## 13. Public Subnets
+## 16. Database Route Isolation
 
-Public subnets host resources that require internet routing.
+The private database route table intentionally does not receive the NAT
+default route.
 
-Potential resources:
+This preserves the distinction:
 
-- Application Load Balancer
-- NAT Gateway
+```text
+Application workloads:
+    controlled outbound access
 
-Public subnets use:
+Database resources:
+    private-only network placement
+```
 
-- Internet Gateway
-- Public route table
-- Required Kubernetes subnet tags
-
-EKS worker nodes must not run in public subnets.
-
----
-
-## 14. Private Application Subnets
-
-Private application subnets host:
-
-- EKS worker nodes
-- Frontend Pods
-- Backend Pods
-- Worker Pods
-- Argo CD
-- Monitoring workloads
-
-These subnets use private route tables.
-
-Outbound access may use:
-
-- NAT Gateway
-- VPC endpoints
-- A cost-optimized alternative for temporary demonstrations
-
----
-
-## 15. Private Database Subnets
-
-Private database subnets host Amazon RDS.
-
-Requirements:
-
-- No direct internet route
-- Dedicated DB subnet group
-- Access only from authorized application security groups
-- No public IP addressing
-- Multi-AZ support when required
-
----
-
-## 16. NAT Gateway Cost Decision
-
-NAT Gateway improves standard private-subnet egress but creates ongoing hourly and data-processing cost.
-
-For the complete production-style architecture, NAT Gateway is the standard design.
-
-For cost-controlled demonstration environments, alternatives may include:
-
-- Single NAT Gateway rather than one per Availability Zone
-- VPC endpoints for AWS services
-- Temporary environment lifetime
-- NAT instance for non-production experimentation
-- Public nodes only in a clearly documented lower-security demo variant
-
-The final deployed design must document its tradeoff.
+RDS and Redis do not require outbound public Internet connectivity for normal
+application operations.
 
 ---
 
 ## 17. VPC Endpoints
 
-Potential VPC endpoints include:
+The development environment uses VPC endpoints for selected AWS services.
 
-- Amazon ECR API
-- Amazon ECR Docker
-- Amazon S3
-- CloudWatch Logs
-- AWS Secrets Manager
-- AWS STS
+Current Terraform outputs include endpoint identifiers for:
 
-Benefits:
+- Amazon EC2;
+- Amazon ECR API;
+- Amazon ECR Docker registry;
+- Amazon EKS;
+- EKS authentication;
+- Elastic Load Balancing;
+- AWS Secrets Manager;
+- Amazon S3.
 
-- Reduced NAT traffic
-- Private AWS service access
-- Improved security posture
+VPC endpoint benefits include:
 
-Cost must be evaluated because interface endpoints also incur charges.
+- private access to AWS APIs;
+- reduced dependency on NAT;
+- improved network isolation;
+- predictable AWS service routing.
+
+Interface endpoints have their own cost, so endpoint selection remains a
+balance between cost and network architecture.
 
 ---
 
-## 18. Security Group Design
+## 18. Security Groups
 
-Planned security groups:
+Terraform separates security boundaries into dedicated security groups.
+
+Important groups include:
 
 ```text
-platform-launchpad-alb-sg
-platform-launchpad-eks-nodes-sg
-platform-launchpad-rds-sg
+ALB security group
+application security group
+PostgreSQL security group
+Redis security group
+VPC endpoint security group
+EKS cluster security group
 ```
 
-### ALB Security Group
+### ALB
 
-Inbound:
-
-- TCP 443 from the internet
-- Optional TCP 80 for redirect to HTTPS
-
-Outbound:
-
-- To approved Kubernetes targets
-
-### EKS Node or Pod Security Group
-
-Inbound:
-
-- Required ALB traffic
-- Required cluster communication
-- Internal service communication
-
-Outbound:
-
-- RDS
-- ECR
-- Secrets Manager
-- CloudWatch
-- Required internet egress
-
-### RDS Security Group
-
-Inbound:
-
-- PostgreSQL TCP 5432 only from approved backend or worker security groups
-
-No broad public CIDR access is permitted.
-
----
-
-## 19. Amazon ECR
-
-Planned repositories:
+Permits public listener traffic required for:
 
 ```text
-platform-launchpad-frontend
-platform-launchpad-backend
-platform-launchpad-worker
+HTTP 80
+HTTPS 443
 ```
 
-Configuration:
+### PostgreSQL
 
-- Encryption at rest
-- Image scanning
-- Lifecycle policies
-- Immutable tags where practical
-- Repository policies
-- Least-privilege push permissions
-- Read access for EKS workloads
-
-Retention policy should preserve:
-
-- Current deployed images
-- Known-good rollback images
-- Recent development images
-- Approved semantic releases
-
----
-
-## 20. Amazon EKS
-
-EKS hosts the production-style application platform.
-
-Planned components:
-
-- EKS control plane
-- Managed node groups
-- Kubernetes namespaces
-- AWS Load Balancer Controller
-- EBS CSI driver if required
-- External DNS if introduced
-- External Secrets integration
-- Argo CD
-- Prometheus and Grafana
-- Logging and tracing components
-
-The cluster name follows:
+PostgreSQL ingress is restricted to the authorized application/EKS path on:
 
 ```text
-platform-launchpad-<environment>-eks
+TCP 5432
 ```
 
----
+### Redis
 
-## 21. EKS Node Groups
-
-Initial node-group goals:
-
-- Small instance types for cost control
-- Two nodes when demonstrating availability
-- Configurable minimum, desired, and maximum capacity
-- Private subnet placement
-- Managed node groups
-
-Example non-production configuration:
+Redis ingress is restricted to the authorized application/EKS path on:
 
 ```text
-min_size     = 1
-desired_size = 2
-max_size     = 3
+TCP 6379
 ```
 
-Instance selection must consider:
-
-- Frontend
-- Backend
-- Worker
-- Argo CD
-- Monitoring workloads
-- Available memory
-- Cost
-
-Observability workloads may require larger nodes than the application alone.
+Terraform explicitly manages EKS-to-database and EKS-to-Redis ingress rules.
 
 ---
 
-## 22. EKS Access Model
+## 19. Amazon EKS
 
-EKS access must be controlled.
+The Kubernetes runtime is Amazon EKS.
 
-Planned identities:
-
-- Platform administrator
-- Argo CD
-- AWS Load Balancer Controller
-- Monitoring components
-- Application service accounts
-- Read-only operational access
-
-Jenkins does not receive unrestricted Kubernetes deployment access.
-
-Administrative access must be limited and auditable.
-
----
-
-## 23. IAM Roles for Service Accounts
-
-IRSA will provide AWS permissions to Kubernetes workloads.
-
-Potential roles:
-
-- AWS Load Balancer Controller
-- External Secrets
-- CloudWatch integration
-- Application workload access where required
-
-Applications must not inherit broad node-role permissions.
-
----
-
-## 24. Kubernetes Namespace Strategy
-
-Planned namespaces:
+Current cluster naming:
 
 ```text
-platform-launchpad
-argocd
-monitoring
-logging
+platform-launchpad-development-eks
 ```
 
-Environment strategy may use:
+Terraform manages:
 
-- Separate clusters for strong isolation, or
-- Separate namespaces and overlays for cost control
+- cluster;
+- cluster IAM role;
+- managed node group;
+- worker-node IAM;
+- cluster access;
+- required EKS addons;
+- Pod Identity support;
+- networking inputs.
 
-For the portfolio MVP, separate namespaces or temporary clusters may be more cost-effective.
+The cluster is not treated as a manually configured resource.
 
 ---
 
-## 25. Amazon RDS PostgreSQL
+## 20. EKS Managed Node Group
 
-RDS stores production-style application data.
-
-Configuration goals:
-
-- PostgreSQL
-- Private DB subnet group
-- Encrypted storage
-- Automated backups
-- Configurable deletion protection
-- Configurable final snapshot
-- Restricted security group
-- Secrets Manager credentials
-- CloudWatch logs where useful
-
-Database identifier:
+The primary managed node group is:
 
 ```text
-platform-launchpad-<environment>-postgres
+platform-launchpad-development-primary
 ```
 
----
-
-## 26. RDS Availability and Cost
-
-Development may use:
-
-- Single-AZ
-- Small instance class
-- Minimal storage
-- Short backup retention
-
-Production-style demonstration may use:
-
-- Multi-AZ when demonstrating resilience
-- Longer backup retention
-- Deletion protection while active
-- Final snapshot during teardown
-
-The selected configuration must clearly state whether it is cost-optimized or high-availability.
-
----
-
-## 27. RDS Destruction Protection
-
-Terraform variables control:
+The validated development configuration uses:
 
 ```text
-deletion_protection
-skip_final_snapshot
-backup_retention_period
-multi_az
+min     = 2
+desired = 2
+max     = 3
 ```
 
-Development defaults may permit quick teardown.
+and currently uses cost-conscious EC2 worker instances.
 
-Production-style defaults should be safer.
+Two nodes have been validated across separate Availability Zones.
 
-Example:
-
-| Setting | Development | Production-Style |
-|---|---:|---:|
-| Deletion protection | false | true |
-| Final snapshot | optional | required |
-| Backup retention | short | longer |
-| Multi-AZ | false | configurable |
+This provides a meaningful availability demonstration without attempting to
+model a large production cluster.
 
 ---
 
-## 28. AWS Secrets Manager
+## 21. EKS Access
 
-Secrets Manager stores:
+Administrative cluster access is explicitly configured rather than depending
+only on legacy implicit behavior.
 
-- PostgreSQL credentials
-- JWT signing secret
-- Redis credentials if required
-- Third-party integration credentials
+Operational identities and workload identities are intentionally separate.
 
-Requirements:
-
-- No plaintext secret values in Terraform output
-- No secret values committed to Git
-- Secret access restricted by IAM
-- Rotation considered for long-lived environments
-- Kubernetes retrieves secrets through an approved integration
-
-Terraform may create secret containers while secret-value creation is handled carefully to avoid unnecessary state exposure.
+Jenkins does not require unrestricted Kubernetes administrative credentials.
 
 ---
 
-## 29. Redis Strategy
+## 22. EKS Pod Identity
 
-The local environment uses Redis through Docker Compose.
+The implemented architecture uses **EKS Pod Identity**, not the earlier
+planned IRSA-only model.
 
-AWS options include:
+Pod Identity associations currently include application identities such as:
 
-- Amazon ElastiCache for Redis-compatible workloads
-- Redis deployed in Kubernetes for temporary demos
-- A managed low-cost external service
+```text
+backend
+worker
+aws-load-balancer-controller
+```
 
-Tradeoffs:
-
-### ElastiCache
-
-Advantages:
-
-- Managed
-- Private networking
-- Better production posture
-
-Disadvantages:
-
-- Additional cost
-- More infrastructure
-
-### Redis in Kubernetes
-
-Advantages:
-
-- Lower short-term demo cost
-- Easier teardown
-
-Disadvantages:
-
-- Less durable
-- More operational responsibility
-- Not ideal for production
-
-The initial AWS demonstration may use Kubernetes-hosted Redis with clearly documented limitations.
+This allows Kubernetes ServiceAccounts to assume narrowly scoped AWS roles
+without embedding long-lived AWS access keys into containers.
 
 ---
 
-## 30. Application Load Balancer
+## 23. Application Runtime IAM
 
-The AWS Load Balancer Controller provisions an ALB from Kubernetes Ingress resources.
+The application runtime IAM module provides AWS access needed by backend and
+worker ServiceAccounts.
 
-The ALB provides:
+Terraform manages:
 
-- Public HTTPS entry point
-- Host-based routing
-- TLS termination
-- Health checks
-- Frontend and backend routing
+- runtime IAM role;
+- Secrets Manager access policy;
+- policy attachment;
+- Pod Identity associations.
 
-Example hosts:
+The policy grants access to the runtime application secret rather than broad
+Secrets Manager permissions.
+
+---
+
+## 24. Worker IAM
+
+The worker retains a distinct IAM role and policy for worker-specific platform
+operations.
+
+This allows future worker responsibilities to expand independently without
+granting equivalent permissions to the frontend or backend.
+
+---
+
+## 25. CI Delivery IAM
+
+Terraform manages dedicated CI delivery identities.
+
+The CI model separates:
+
+```text
+Jenkins identity
+        |
+        v
+Assume CI delivery role
+        |
+        v
+Approved ECR / delivery actions
+```
+
+Terraform outputs include:
+
+- Jenkins user identity;
+- role name;
+- role ARN;
+- ECR publication policy;
+- assume-role policy.
+
+CI credentials therefore do not need to provide unrestricted AWS
+administrative access.
+
+---
+
+## 26. AWS Load Balancer Controller IAM
+
+Terraform manages IAM prerequisites for the AWS Load Balancer Controller.
+
+Resources include:
+
+- controller IAM role;
+- controller policy;
+- policy attachment;
+- EKS Pod Identity association.
+
+Argo CD manages the Kubernetes Helm release while Terraform manages its AWS
+identity prerequisites.
+
+This preserves a clean ownership boundary.
+
+---
+
+## 27. Amazon ECR
+
+Platform Launchpad uses private Amazon ECR repositories.
+
+### Application Repository
+
+The application repository stores the application container artifacts used by:
+
+- backend;
+- frontend;
+- worker.
+
+GitOps overlays deploy immutable image digests.
+
+### AWS Load Balancer Controller Repository
+
+The controller image is mirrored into:
+
+```text
+platform-launchpad-development-aws-load-balancer-controller
+```
+
+The runtime does not depend directly on the upstream public container
+registry.
+
+---
+
+## 28. Argo CD Bootstrap ECR
+
+Terraform owns three private repositories required by the Argo CD bootstrap:
+
+```text
+platform-launchpad-development-argocd
+platform-launchpad-development-argocd-dex
+platform-launchpad-development-argocd-redis
+```
+
+These repositories contain pinned private copies of:
+
+```text
+Argo CD
+Dex
+Redis
+```
+
+The repositories were originally created during runtime recovery work and
+were later imported into Terraform state.
+
+This demonstrates the project's rule that manually discovered infrastructure
+must either be imported into IaC ownership or intentionally documented as
+external.
+
+---
+
+## 29. ECR Lifecycle Management
+
+Terraform applies lifecycle policies to managed repositories.
+
+Lifecycle policies control retained image count and reduce unbounded storage
+growth.
+
+Image-retention policy must still preserve images required for:
+
+- current deployment;
+- rollback;
+- bootstrap;
+- recent known-good releases.
+
+---
+
+## 30. Amazon RDS PostgreSQL
+
+Amazon RDS PostgreSQL is the production-style system of record.
+
+Terraform manages:
+
+- DB instance;
+- DB subnet group;
+- database security controls;
+- storage configuration;
+- database name;
+- credential integration.
+
+Current database naming follows:
+
+```text
+platform-launchpad-development-postgres
+```
+
+The application database name is:
+
+```text
+platform_launchpad
+```
+
+RDS is private and reachable from authorized Kubernetes workloads.
+
+---
+
+## 31. RDS Credentials
+
+The RDS master password is generated and maintained through AWS-managed secret
+integration rather than stored directly in source control.
+
+Terraform exposes the secret ARN as an output for controlled operational use.
+
+The application itself does not use the raw Terraform output as its runtime
+configuration.
+
+Instead, runtime application connection information is stored separately in
+the application runtime secret.
+
+---
+
+## 32. Application Runtime Secret
+
+Terraform manages:
+
+```text
+platform-launchpad/development/runtime
+```
+
+The current runtime secret contains:
+
+```text
+database_url
+secret_key
+```
+
+The secret value is consumed in Kubernetes through the Secrets Store CSI
+Driver.
+
+Terraform manages the secret container and IAM authorization boundary.
+
+Sensitive values themselves must never be committed to Git or Terraform
+outputs intended for routine display.
+
+---
+
+## 33. ElastiCache Redis
+
+Terraform provisions an ElastiCache Redis replication group.
+
+Redis runs in private networking and uses a restricted security group.
+
+Terraform exposes:
+
+```text
+redis_endpoint
+redis_port
+redis_replication_group_arn
+```
+
+Network connectivity from EKS to Redis has been validated.
+
+The current application worker does not require Redis as its primary
+deployment-request queue; Redis remains available for future caching,
+coordination, or queue use cases.
+
+---
+
+## 34. Workload-to-Data Network Access
+
+Terraform explicitly manages network rules allowing EKS workloads to reach:
+
+```text
+PostgreSQL :5432
+Redis      :6379
+```
+
+This avoids broad CIDR-based ingress where a tighter security-group
+relationship can be used.
+
+Connectivity from Kubernetes workloads to both data services has been
+validated.
+
+---
+
+## 35. Application Load Balancer Integration
+
+Terraform manages AWS prerequisites such as:
+
+- networking;
+- security groups;
+- controller IAM.
+
+The Kubernetes Ingress and controller runtime are GitOps-managed.
+
+The ALB therefore demonstrates shared responsibility:
+
+```text
+Terraform:
+    AWS prerequisites
+
+Argo CD:
+    controller runtime
+    Ingress desired state
+
+AWS Load Balancer Controller:
+    ALB reconciliation
+```
+
+---
+
+## 36. Route 53 Ownership Boundary
+
+The `christineadelusi.com` hosted zone currently exists in a separate AWS
+development account.
+
+The public record:
 
 ```text
 launchpad.christineadelusi.com
-api.launchpad.christineadelusi.com
-argocd.launchpad.christineadelusi.com
-grafana.launchpad.christineadelusi.com
 ```
 
-Actual DNS structure may be simplified.
+points to the Platform Launchpad ALB.
+
+This Route 53 record is currently an external/cross-account integration
+dependency rather than a Terraform-managed resource in this environment.
+
+That distinction must remain explicit in infrastructure documentation.
 
 ---
 
-## 31. Route 53
+## 37. ACM Ownership Boundary
 
-Route 53 manages application DNS records.
+The Platform Launchpad TLS certificate exists in the AWS runtime account and
+is consumed by the Kubernetes Ingress through the AWS Load Balancer
+Controller.
 
-Planned records:
+ACM certificate creation is not currently represented by an output from the
+development Terraform configuration.
 
-- Frontend
-- API
-- Argo CD
-- Grafana
-
-Terraform may create:
-
-- Alias records to the ALB
-- Validation records for ACM
-- Environment-specific subdomains
-
-Hosted-zone ownership remains outside environment teardown unless explicitly managed.
+It should therefore not be described as fully Terraform-owned until that
+resource is added or imported into the infrastructure configuration.
 
 ---
 
-## 32. ACM Certificates
+## 38. Terraform Outputs
 
-ACM provides TLS certificates.
+The development environment exposes operational outputs required by adjacent
+platform layers.
 
-Requirements:
+Categories include:
 
-- DNS validation
-- Terraform-managed validation records
-- Certificate lifecycle safety
-- Correct region for ALB use
-- Separate hostnames or wildcard certificate where appropriate
-
-Certificate destruction should be handled carefully when shared across environments.
-
----
-
-## 33. IAM Role Separation
-
-Planned roles:
-
-### Terraform Role
-
-Permissions:
-
-- Provision approved infrastructure
-- Read and write Terraform state
-- Manage resources within project scope
-
-### Jenkins Application Delivery Role
-
-Permissions:
-
-- Authenticate to ECR
-- Push approved images
-- Read repository metadata
-
-It does not receive full infrastructure-administration rights.
-
-### Jenkins Terraform Role
-
-Permissions:
-
-- Execute Terraform plan and apply for approved project resources
-
-This role is separate from application delivery.
-
-### Kubernetes Workload Roles
-
-Permissions:
-
-- Access only required AWS services
-- Use IRSA
-- Avoid broad node-role inheritance
-
----
-
-## 34. Terraform State Security
-
-Terraform state may contain sensitive infrastructure metadata.
-
-Controls:
-
-- S3 encryption
-- Bucket versioning
-- Public-access block
-- Restricted IAM policy
-- DynamoDB locking
-- Logging where appropriate
-- No state file in Git
-- No state file in Jenkins artifacts
-- Backup and recovery procedure
-
-State access should be considered equivalent to privileged infrastructure access.
-
----
-
-## 35. Terraform Variables
-
-Variables should cover:
-
-- Project name
-- Environment
-- AWS region
-- VPC CIDR
-- Availability Zones
-- Subnet CIDRs
-- EKS version
-- Node instance types
-- Node scaling
-- RDS instance class
-- RDS storage
-- Backup retention
-- Multi-AZ
-- Domain name
-- Certificate options
-- Enable or disable NAT
-- Enable or disable observability
-- Resource tags
-
-Sensitive variables must be marked:
-
-```hcl
-sensitive = true
-```
-
-This reduces accidental display but does not remove sensitive values from state.
-
----
-
-## 36. Terraform Outputs
-
-Useful outputs include:
-
-- VPC ID
-- Public subnet IDs
-- Private application subnet IDs
-- Private database subnet IDs
-- EKS cluster name
-- EKS endpoint
-- ECR repository URLs
-- RDS endpoint
-- Secret ARNs
-- Route 53 record names
-- ALB hostname
-- Argo CD endpoint
-- Grafana endpoint
-
-Sensitive outputs must be marked appropriately.
-
----
-
-## 37. Terraform Module Standards
-
-Each module should include:
+### Networking
 
 ```text
-main.tf
-variables.tf
-outputs.tf
-versions.tf
-README.md
+vpc_id
+public_subnet_ids
+private_app_subnet_ids
+private_db_subnet_ids
+nat_gateway_id
+nat_gateway_public_ip
 ```
 
-Modules must:
+### EKS
 
-- Avoid environment-specific hardcoding
-- Expose only required variables
-- Apply consistent tags
-- Document assumptions
-- Document outputs
-- Define validation rules
-- Avoid hidden dependencies
-- Support repeated use where practical
+```text
+eks_cluster_name
+eks_cluster_arn
+eks_cluster_endpoint
+eks_cluster_version
+eks_node_group_name
+eks_node_group_status
+```
+
+### Data
+
+```text
+rds_endpoint
+rds_instance_arn
+redis_endpoint
+redis_port
+redis_replication_group_arn
+```
+
+### ECR
+
+```text
+ecr_repository_name
+ecr_repository_url
+load_balancer_controller_repository_url
+argocd_repository_names
+argocd_repository_urls
+```
+
+### Secrets
+
+```text
+runtime_secret_name
+runtime_secret_arn
+rds_master_user_secret_arn
+```
+
+### IAM and Pod Identity
+
+```text
+application_runtime_role_arn
+application_runtime_policy_arn
+application_runtime_pod_identity_association_ids
+worker_role_arn
+worker_policy_arn
+load_balancer_controller_role_arn
+ci_delivery_role_arn
+```
+
+### VPC Endpoints
+
+Terraform also exposes endpoint identifiers for validation and troubleshooting.
+
+Outputs form an API between Terraform and platform automation.
+
+The Argo CD bootstrap intentionally consumes Terraform outputs instead of
+hard-coding infrastructure identifiers.
 
 ---
 
-## 38. Terraform Validation Pipeline
+## 39. Terraform-to-Bootstrap Integration
 
-Required checks:
+The Argo CD bootstrap script reads Terraform outputs such as:
 
 ```text
-terraform fmt -check
-terraform init
+aws_region
+eks_cluster_name
+argocd_repository_urls
+```
+
+This creates a direct dependency chain:
+
+```text
+Terraform
+    |
+    | outputs
+    v
+Bootstrap Automation
+    |
+    v
+Argo CD
+```
+
+The bootstrap script therefore remains portable across recreated
+infrastructure without embedding cluster-specific IDs.
+
+---
+
+## 40. GitOps Boundary
+
+Terraform does not deploy application Kubernetes manifests.
+
+Argo CD owns those resources from the GitOps repository.
+
+Likewise, Argo CD does not create the underlying VPC, EKS cluster, RDS
+instance, Redis cluster, or IAM foundation.
+
+This prevents Terraform and Argo CD from competing for ownership of the same
+resources.
+
+---
+
+## 41. Validation Workflow
+
+Infrastructure changes follow:
+
+```text
+terraform fmt
+        |
+        v
 terraform validate
+        |
+        v
 terraform plan
+        |
+        v
+Plan inspection
+        |
+        v
+terraform apply
+        |
+        v
+Runtime validation
+        |
+        v
+terraform plan
+        |
+        v
+Zero drift
 ```
 
-Additional checks may include:
+For higher-risk changes, plans are saved:
 
-- TFLint
-- Checkov
-- Trivy configuration scanning
-- Terraform-docs
-- Policy-as-code checks
+```bash
+terraform plan -out=<plan-file>
+```
 
-Production apply requires approval.
+and inspected before application.
 
 ---
 
-## 39. Terraform Plan Review
+## 42. Import Strategy
 
-Plan review should inspect:
+Infrastructure discovered outside Terraform should not remain permanently
+unmanaged.
 
-- Resource creation
-- Resource replacement
-- Resource destruction
-- Security-group changes
-- IAM changes
-- RDS changes
-- EKS changes
-- DNS changes
-- State changes
-- Unexpected drift
+Adoption workflow:
 
-High-risk changes require explicit acknowledgment.
+```text
+Existing AWS resource
+        |
+        v
+Terraform configuration created
+        |
+        v
+terraform import
+        |
+        v
+terraform plan
+        |
+        v
+Reconcile safe differences
+        |
+        v
+Terraform ownership
+```
 
----
-
-## 40. Destructive Change Controls
-
-High-risk operations include:
-
-- RDS replacement
-- EKS deletion
-- VPC deletion
-- IAM trust-policy expansion
-- State-bucket changes
-- DNS removal
-- Secret replacement
-- Security-group broadening
-
-Controls may include:
-
-- Manual approval
-- Terraform lifecycle rules
-- Deletion protection
-- Final snapshots
-- Backups
-- Separate destroy workflow
+The Argo CD ECR repositories are a validated example of this workflow.
 
 ---
 
-## 41. Drift Detection
+## 43. Replacement Safety
 
-Terraform drift detection may run on a schedule.
+Terraform plans must be reviewed specifically for:
 
-Workflow:
+```text
+create
+update
+replace
+destroy
+```
 
-1. Initialize the environment.
-2. Run a refresh-only plan or standard plan.
-3. Detect unmanaged changes.
-4. Notify the platform owner.
-5. Reconcile through code.
+Unexpected replacement of resources such as:
 
-Drift must not be silently accepted without review.
+- RDS;
+- EKS;
+- VPC;
+- NAT;
+- IAM roles
 
----
+must block an automatic apply until reviewed.
 
-## 42. Cost Controls
-
-Cost controls include:
-
-- AWS Budgets
-- Cost-allocation tags
-- Small development instances
-- Short-lived staging and production-style environments
-- ECR lifecycle policies
-- Log-retention limits
-- On-demand teardown
-- Optional observability deployment
-- Minimal NAT architecture for demonstrations
-- RDS sizing controls
-- Autoscaling bounds
-
-The infrastructure documentation should include an estimated monthly cost range before deployment.
+Saved plans are preferred for infrastructure changes where exact execution
+matters.
 
 ---
 
-## 43. AWS Budgets
+## 44. Cost Management
 
-Terraform may provision a project budget.
+The primary AWS development cost drivers include:
 
-Alerts may be sent at:
+- EKS control plane;
+- EC2 EKS worker nodes;
+- NAT Gateway;
+- RDS PostgreSQL;
+- ElastiCache Redis;
+- Application Load Balancer;
+- interface VPC endpoints.
 
-- 50 percent
-- 80 percent
-- 100 percent
+The environment should not remain running indefinitely after evidence
+collection.
 
-Budget alerts should not be treated as real-time shutdown mechanisms.
+Cost control relies heavily on:
 
----
-
-## 44. Logging and Monitoring Infrastructure
-
-AWS infrastructure telemetry may include:
-
-- EKS control-plane logs
-- CloudWatch application logs
-- RDS logs
-- ALB access logs
-- CloudTrail
-- VPC Flow Logs where enabled
-- Budget notifications
-
-Log retention must be configurable to control cost.
+- temporary environment lifetime;
+- small development instance sizes;
+- minimal replica counts;
+- controlled backup retention;
+- lifecycle policies;
+- deliberate teardown.
 
 ---
 
-## 45. Backup Strategy
+## 45. Development Teardown Philosophy
 
-### Terraform State
+The development environment is designed to be disposable at the infrastructure
+layer.
 
-Protected through:
+The expected lifecycle is:
 
-- S3 versioning
-- Encryption
-- Restricted access
+```text
+Provision
+    |
+    v
+Validate
+    |
+    v
+Demonstrate
+    |
+    v
+Capture Evidence
+    |
+    v
+Destroy
+```
 
-### RDS
+Source-controlled configuration remains available after teardown.
 
-Protected through:
-
-- Automated backups
-- Final snapshots
-- Optional manual snapshots
-- Restore testing
-
-### GitOps and Source
-
-Protected through:
-
-- GitHub history
-- Branch protection
-- Local clone and remote repository
-
-Application containers are retained in ECR according to lifecycle policy.
-
----
-
-## 46. Disaster Recovery
-
-Recovery objectives for the portfolio release are primarily documentation-driven rather than strict enterprise SLAs.
-
-Recovery flow:
-
-1. Restore Terraform state if required.
-2. Recreate infrastructure through Terraform.
-3. Restore RDS from a snapshot if required.
-4. Reinstall Argo CD.
-5. Reconnect the GitOps repository.
-6. Reconcile application workloads.
-7. Validate DNS, TLS, secrets, and health.
-8. Confirm observability.
-
-The target is reproducibility rather than zero downtime.
+The ability to recreate the platform is considered more valuable than keeping
+an idle demonstration environment running permanently.
 
 ---
 
-## 47. Teardown Strategy
+## 46. Pre-Destroy Validation
 
-Teardown is essential for cost control.
+Before destroying the environment:
 
-Recommended sequence:
+1. ensure Git working trees are clean;
+2. push all infrastructure changes;
+3. record current Terraform outputs if useful;
+4. capture architecture and application screenshots;
+5. confirm Argo CD Applications are healthy;
+6. capture deployment validation evidence;
+7. decide whether database snapshots must be retained;
+8. review external Route 53 records;
+9. review external ACM resources;
+10. inspect Terraform destroy plan.
 
-1. Disable production traffic.
-2. Confirm no interview or demo is active.
-3. Export or snapshot required database data.
-4. Disable RDS deletion protection if intentionally destroying.
-5. Remove Kubernetes Ingress resources.
-6. Confirm ALB resources are deleted.
-7. Remove Argo CD-managed workloads.
-8. Run Terraform destroy.
-9. Confirm NAT Gateways and load balancers are removed.
-10. Confirm RDS handling matches snapshot policy.
-11. Retain Terraform state backend.
-12. Retain source, GitOps history, and documentation.
-13. Verify AWS Billing and Cost Explorer.
-
-The remote-state bucket should not be destroyed with normal environment teardown.
+A separate teardown runbook should document the exact operational sequence.
 
 ---
 
-## 48. Rebuild Strategy
+## 47. Rebuild Strategy
 
-Rebuild flow:
+Rebuilding the development platform follows:
 
-1. Confirm backend state resources.
-2. Initialize Terraform.
-3. Apply networking and IAM.
-4. Apply ECR, EKS, and RDS.
-5. Configure DNS and certificates.
-6. Install platform controllers.
-7. Install Argo CD.
-8. Connect GitOps repository.
-9. Restore secrets.
-10. Restore database where required.
-11. Reconcile workloads.
-12. Validate monitoring and application health.
+```text
+Terraform
+    |
+    v
+AWS infrastructure
+    |
+    v
+Argo CD bootstrap
+    |
+    v
+GitOps Applications
+    |
+    v
+Database migration
+    |
+    v
+Application runtime
+```
 
-Rebuild steps must eventually be tested and documented as a runbook.
+Representative commands:
 
----
+```bash
+cd terraform/environments/development
 
-## 49. Local and Hosted Portfolio Separation
+terraform init
+terraform plan
+terraform apply
+```
 
-The lightweight public portfolio deployment and AWS production-style deployment serve different purposes.
+then:
 
-### Lightweight Hosted Deployment
+```bash
+cd ../../..
 
-Purpose:
+./bootstrap/argocd/install.sh
+./bootstrap/argocd/apply-applications.sh
+```
 
-- Always-accessible recruiter demo
-- Minimal operating cost
-
-Possible services:
-
-- Vercel
-- Render or similar API hosting
-- Low-cost managed PostgreSQL
-
-### AWS Deployment
-
-Purpose:
-
-- Demonstrate infrastructure architecture
-- Demonstrate EKS
-- Demonstrate Terraform
-- Demonstrate GitOps
-- Demonstrate IAM and observability
-
-The application code remains consistent across both deployment models.
+Argo CD then resumes Kubernetes reconciliation.
 
 ---
 
-## 50. Known MVP Limitations
+## 48. Recovery Design
 
-The initial infrastructure implementation may not include:
+The architecture reduces recovery dependence on individual machines.
 
-- Multi-account AWS organization
-- Multi-region failover
-- Dedicated transit networking
-- Full private endpoint architecture
-- Automated secret rotation
-- Production-grade Redis
-- Service mesh
-- WAF
-- Shield Advanced
-- Enterprise SIEM integration
-- Formal compliance controls
+Recovery assets include:
 
-These are future hardening opportunities.
+- Git repository;
+- Terraform configuration;
+- remote Terraform state;
+- application source;
+- GitOps repository;
+- private container artifacts;
+- bootstrap automation;
+- database backup strategy;
+- architecture documentation.
+
+A failed Kubernetes cluster should therefore not require manual recreation of
+application manifests.
 
 ---
 
-## 51. Infrastructure Acceptance Criteria
+## 49. Implemented vs External vs Planned
 
-The infrastructure design is complete when:
+### Implemented and Terraform-Managed
 
-- Remote-state architecture is defined.
-- Environment separation is defined.
-- Terraform repository structure is defined.
-- VPC and subnet architecture are defined.
-- Security-group boundaries are defined.
-- ECR repositories are defined.
-- EKS architecture is defined.
-- RDS architecture is defined.
-- IAM role separation is defined.
-- Secrets handling is defined.
-- DNS and TLS are defined.
-- Terraform plan and approval workflows are defined.
-- Cost controls are defined.
-- Backup and recovery are defined.
-- Teardown and rebuild strategies are defined.
-- Known MVP limitations are documented.
+```text
+VPC
+Subnets
+Route tables
+Internet Gateway
+NAT Gateway
+Security groups
+EKS
+Managed node group
+EKS access
+Pod Identity support
+Application runtime IAM
+Worker IAM
+CI delivery IAM
+AWS Load Balancer Controller IAM
+Application ECR
+Controller ECR
+Argo CD ECR repositories
+RDS PostgreSQL
+ElastiCache Redis
+Secrets Manager runtime secret
+VPC endpoints
+EKS-to-RDS rules
+EKS-to-Redis rules
+```
+
+### Implemented but Managed Outside This Terraform Environment
+
+```text
+Route 53 public hosted zone
+launchpad DNS record
+ACM certificate
+Argo CD Kubernetes runtime
+AWS Load Balancer Controller Kubernetes runtime
+Application Kubernetes resources
+```
+
+### Planned / Future
+
+```text
+Full staging AWS environment
+Full production AWS environment
+Terraform-managed cross-account DNS
+Terraform-managed ACM lifecycle
+observability infrastructure
+autoscaling validation
+budget alarms
+additional backup automation
+```
+
+---
+
+## 50. Infrastructure Evolution
+
+The infrastructure evolved substantially from the original design.
+
+### NAT
+
+**Original design:** NAT was a production-style option with possible
+cost-optimized alternatives.
+
+**Implemented design:** a NAT Gateway was required for private workloads that
+need external Git and Internet connectivity.
+
+### EKS Workload Identity
+
+**Original design:** IRSA was the expected mechanism.
+
+**Implemented design:** EKS Pod Identity is used for the current runtime.
+
+### Argo CD Registry Dependencies
+
+**Original design:** Argo CD bootstrap registries were not explicitly modeled.
+
+**Implemented design:** Argo CD, Dex, and Redis bootstrap images are mirrored
+into Terraform-managed private ECR repositories.
+
+### Platform Controller
+
+**Original design:** AWS Load Balancer Controller was listed as an EKS
+component.
+
+**Implemented design:** AWS prerequisites are Terraform-managed while its
+Kubernetes Helm deployment is Argo CD-managed.
+
+### Secrets
+
+**Original design:** Secrets Manager integration was planned.
+
+**Implemented design:** the runtime secret and workload permissions are
+Terraform-managed, while Kubernetes mounts values through Secrets Store CSI.
+
+### Network Access
+
+**Original design:** VPC endpoints were optional.
+
+**Implemented design:** multiple endpoints are deployed alongside NAT egress
+to provide private AWS service access.
+
+---
+
+## 51. Architecture Principles Demonstrated
+
+The Terraform implementation demonstrates:
+
+- modular Infrastructure as Code;
+- environment-specific composition;
+- private workload placement;
+- private data tiers;
+- controlled Internet egress;
+- workload identity;
+- least-privilege IAM;
+- explicit security-group relationships;
+- private artifact delivery;
+- reusable Terraform outputs;
+- infrastructure import and adoption;
+- drift detection;
+- GitOps ownership boundaries;
+- bootstrap dependency management;
+- cost-conscious architecture;
+- deterministic recovery.
+
+---
+
+## 52. Summary
+
+Terraform provides the AWS foundation for Platform Launchpad.
+
+The current development implementation includes:
+
+```text
+Networking
+EKS
+IAM
+Pod Identity
+ECR
+RDS
+Redis
+Secrets Manager
+VPC Endpoints
+NAT
+Security Groups
+```
+
+Terraform intentionally stops at the cloud infrastructure boundary.
+
+Argo CD owns Kubernetes desired state.
+
+Bootstrap automation connects those two layers.
+
+The resulting model is:
+
+```text
+Terraform
+    |
+    v
+AWS Foundation
+    |
+    v
+Argo CD Bootstrap
+    |
+    v
+GitOps
+    |
+    v
+Platform Runtime
+```
+
+This creates an infrastructure platform that is reproducible, auditable,
+cost-aware, and suitable for controlled teardown and rebuild.

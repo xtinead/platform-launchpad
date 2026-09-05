@@ -4,258 +4,398 @@
 
 This document defines the observability architecture for Platform Launchpad.
 
-The platform must provide enough telemetry to understand:
+The observability strategy is designed to answer operational questions such as:
 
-- Whether the application is available
-- Whether users can complete critical workflows
-- Whether environment provisioning is progressing
-- Whether workers are healthy
-- Whether PostgreSQL and Redis are reachable
-- Whether deployments are healthy
-- Whether security-sensitive activity is occurring
-- Whether platform resources are approaching capacity
-- Whether failures can be correlated across services
+- Is the application reachable?
+- Is the backend alive?
+- Is the backend ready to serve requests?
+- Is PostgreSQL reachable?
+- Are frontend, backend, and worker workloads healthy?
+- Are deployment requests being processed successfully?
+- Is Argo CD synchronized with Git?
+- Are GitOps applications healthy?
+- Is the AWS Load Balancer Controller healthy?
+- Is infrastructure drifting from Terraform configuration?
+- Can an operator trace a user-facing failure through the relevant platform layers?
+- What additional telemetry should be introduced as the platform matures?
 
-The observability design covers:
+Platform Launchpad intentionally distinguishes between:
 
-- Metrics
-- Logs
-- Traces
-- Health checks
-- Dashboards
-- Alerts
-- Service-level indicators
-- Operational runbooks
-- CI/CD telemetry
-- AWS and Kubernetes telemetry
+1. **Implemented and validated operational visibility**
+2. **Designed but not yet deployed observability capabilities**
+
+This prevents roadmap tooling such as Prometheus, Grafana, Loki, Tempo, and
+OpenTelemetry from being presented as already-running production services.
 
 ---
 
-## 2. Observability Objectives
+## 2. Current Observability Status
 
-Platform Launchpad observability must:
+The AWS development environment currently provides operational visibility
+through:
 
-- Provide clear service health signals.
-- Detect user-impacting failures quickly.
-- Correlate requests across frontend, backend, worker, and infrastructure.
-- Expose environment-lifecycle progress and failure.
-- Support troubleshooting without exposing secrets.
-- Provide metrics suitable for dashboards and alerts.
-- Support Kubernetes and AWS infrastructure monitoring.
-- Track CI/CD and GitOps deployment health.
-- Control telemetry retention and cost.
-- Produce useful interview-ready dashboards and demonstrations.
-- Support future service-level objectives.
+- FastAPI application logs;
+- worker logs;
+- Kubernetes pod state;
+- Kubernetes Deployment state;
+- Kubernetes readiness probes;
+- Kubernetes liveness probes;
+- backend `/health/live`;
+- backend `/health/ready`;
+- database readiness checks;
+- frontend HTTP availability;
+- AWS Application Load Balancer responses;
+- HTTPS endpoint validation;
+- Argo CD synchronization status;
+- Argo CD application health status;
+- Argo CD Sync-hook execution results;
+- Kubernetes events and resource descriptions;
+- Terraform drift detection;
+- direct AWS CLI inspection where required.
+
+The following have been validated in the development environment:
+
+```text
+Terraform
+    No infrastructure drift
+
+Argo CD
+    platform-launchpad-development
+        Synced
+        Healthy
+
+    aws-load-balancer-controller-development
+        Synced
+        Healthy
+
+Application
+    frontend
+        Running
+
+    backend
+        Running
+
+    worker
+        Running
+
+HTTPS
+    HTTP/2 200
+
+Backend readiness
+    database = ok
+
+Worker
+    deployment requests processed successfully
+```
+
+A full centralized metrics, logs, traces, and alerting stack remains a future
+platform phase.
 
 ---
 
-## 3. Observability Principles
+## 3. Observability Objectives
 
-### 3.1 Observe User Outcomes
+Platform Launchpad observability should ultimately provide:
 
-The platform should monitor whether users can:
+- application availability visibility;
+- dependency-health visibility;
+- deployment visibility;
+- worker processing visibility;
+- infrastructure health;
+- GitOps health;
+- security-relevant telemetry;
+- user-impact signals;
+- low-friction troubleshooting;
+- request correlation;
+- controlled telemetry cost;
+- actionable alerts;
+- service-level objectives.
 
-- Register
-- Log in
-- View environments
-- Create environment requests
-- Track provisioning
-- Request destruction
+The platform should prioritize telemetry that answers operational questions
+rather than collecting data without a defined use case.
 
-Infrastructure health alone does not prove that user workflows are functioning.
+---
 
-### 3.2 Use the Four Golden Signals
+## 4. Observability Principles
 
-For application services, monitor:
+### 4.1 Measure User Impact
 
-- Latency
-- Traffic
-- Errors
-- Saturation
+Infrastructure health alone does not prove that the platform is functioning.
 
-### 3.3 Correlate Telemetry
+A healthy EC2 instance or Kubernetes node does not prove that:
 
-Metrics, logs, traces, audit events, and deployment metadata should share identifiers where possible.
+- users can authenticate;
+- environments can be created;
+- deployment requests can be submitted;
+- workers can process requests;
+- the database is reachable;
+- the frontend is available.
 
-Important identifiers include:
+User-facing health signals must therefore complement infrastructure metrics.
 
-- Request ID
-- Trace ID
-- User ID
-- Environment ID
-- Deployment request ID
-- Jenkins build number
-- Git commit
-- Image digest
-- GitOps commit
+---
 
-### 3.4 Avoid Sensitive Telemetry
+### 4.2 Separate Liveness from Readiness
+
+Liveness answers:
+
+```text
+Is the process running?
+```
+
+Readiness answers:
+
+```text
+Can the service safely receive traffic?
+```
+
+A dependency outage should not automatically imply that the application
+process itself must be restarted.
+
+---
+
+### 4.3 Correlate Across Layers
+
+Operational data should support correlation across:
+
+```text
+User request
+    |
+    v
+Frontend
+    |
+    v
+FastAPI request
+    |
+    v
+Database operation
+    |
+    v
+Deployment request
+    |
+    v
+Worker processing
+```
+
+Useful correlation identifiers include:
+
+- request ID;
+- deployment request ID;
+- environment ID;
+- Git commit;
+- Jenkins build number;
+- image digest;
+- GitOps commit.
+
+High-cardinality identifiers belong primarily in logs and traces rather than
+Prometheus labels.
+
+---
+
+### 4.4 Avoid Sensitive Telemetry
 
 Telemetry must not contain:
 
-- Passwords
-- Password hashes
-- JWTs
-- Authorization headers
-- AWS credentials
-- Database credentials
-- Secret values
-- Private keys
-- Full sensitive request bodies
+- passwords;
+- password hashes;
+- JWT values;
+- authorization headers;
+- AWS credentials;
+- database credentials;
+- application secrets;
+- private keys;
+- full sensitive request bodies.
 
-### 3.5 Alerts Must Be Actionable
-
-An alert should identify:
-
-- What failed
-- Where it failed
-- Potential user impact
-- Relevant identifiers
-- Suggested investigation path
-- Associated runbook
-
-### 3.6 Instrumentation Is Part of the Application
-
-Metrics, logs, health endpoints, and tracing are implementation requirements rather than post-release additions.
-
-### 3.7 Cost Is a Constraint
-
-Telemetry retention, cardinality, storage, and query patterns must be controlled.
+Observability systems should never become alternate secret stores.
 
 ---
 
-## 4. Observability Architecture
+### 4.5 Alerts Must Be Actionable
+
+An alert should explain:
+
+- what failed;
+- where it failed;
+- probable user impact;
+- relevant environment or service;
+- investigation path;
+- associated runbook.
+
+Alerts that contain only a raw metric name provide limited operational value.
+
+---
+
+### 4.6 Instrumentation Is Part of Platform Design
+
+Observability should be considered during application and platform design.
+
+At minimum, services should expose:
+
+- health;
+- readiness;
+- useful logs;
+- meaningful lifecycle events.
+
+Metrics and distributed tracing can then be added without redesigning the
+entire application.
+
+---
+
+### 4.7 Cost Is a Constraint
+
+Telemetry storage can become expensive.
+
+The design must control:
+
+- metric cardinality;
+- log volume;
+- trace sampling;
+- retention;
+- dashboard query cost;
+- AWS-native monitoring cost.
+
+The development environment should not run expensive observability services
+continuously merely for portfolio demonstration.
+
+---
+
+## 5. Current Operational Visibility Architecture
+
+The implemented visibility path is:
 
 ```mermaid
-flowchart LR
-    USER[User Browser]
+flowchart TB
+    USER[User]
+    ALB[AWS Application Load Balancer]
     FRONTEND[Next.js Frontend]
     API[FastAPI Backend]
-    REDIS[(Redis)]
     WORKER[Python Worker]
-    DB[(PostgreSQL)]
+    DB[(RDS PostgreSQL)]
 
-    PROM[Prometheus]
-    GRAFANA[Grafana]
-    LOKI[Loki]
-    TEMPO[Tempo]
-    OTEL[OpenTelemetry Collector]
-    CW[CloudWatch]
-    ALERTS[Alertmanager / Notifications]
+    K8S[Kubernetes Health and Events]
+    ARGO[Argo CD Status]
+    TF[Terraform Plan]
+    LOGS[Application and Worker Logs]
+
+    USER --> ALB
+    ALB --> FRONTEND
+    ALB --> API
 
     FRONTEND --> API
     API --> DB
-    API --> REDIS
-    REDIS --> WORKER
     WORKER --> DB
 
-    FRONTEND -->|Traces and Web Vitals| OTEL
-    API -->|Metrics| PROM
-    API -->|Logs| LOKI
-    API -->|Traces| OTEL
+    API --> LOGS
+    WORKER --> LOGS
 
-    WORKER -->|Metrics| PROM
-    WORKER -->|Logs| LOKI
-    WORKER -->|Traces| OTEL
+    API --> K8S
+    WORKER --> K8S
+    FRONTEND --> K8S
 
-    OTEL --> TEMPO
-    PROM --> GRAFANA
-    LOKI --> GRAFANA
-    TEMPO --> GRAFANA
-
-    PROM --> ALERTS
-    ALERTS --> SLACK[Slack]
-
-    API --> CW
-    WORKER --> CW
-    EKS[EKS and AWS Resources] --> CW
+    ARGO --> K8S
+    TF --> AWS[AWS Infrastructure]
 ```
 
----
+Current troubleshooting relies on the combination of:
 
-## 5. Observability Components
+```text
+curl
+kubectl
+Argo CD
+Terraform
+AWS CLI
+application logs
+```
 
-### Prometheus
-
-Prometheus collects application and platform metrics.
-
-Primary sources:
-
-- FastAPI
-- Python worker
-- Kubernetes
-- Node metrics
-- Kube-state metrics
-- Optional Redis exporter
-- Optional PostgreSQL exporter
-
-### Grafana
-
-Grafana provides:
-
-- Application dashboards
-- Worker dashboards
-- Environment lifecycle dashboards
-- Kubernetes dashboards
-- Database dashboards
-- CI/CD dashboards
-- Alert visualization
-
-### Loki
-
-Loki stores and queries structured application and worker logs.
-
-### Tempo
-
-Tempo stores distributed traces.
-
-### OpenTelemetry
-
-OpenTelemetry provides vendor-neutral instrumentation and trace propagation.
-
-### CloudWatch
-
-CloudWatch provides AWS-native visibility for:
-
-- EKS control plane
-- RDS
-- ALB
-- CloudWatch Logs
-- AWS service metrics
-- Budget notifications
-
-### Alertmanager
-
-Alertmanager routes actionable Prometheus alerts.
-
-Initial notification channel:
-
-- Slack
+This is sufficient for the current development milestone but not the final
+observability architecture.
 
 ---
 
-## 6. Service Inventory
+## 6. Target Observability Architecture
 
-Services requiring observability:
+The future target architecture adds centralized telemetry.
 
-| Service | Metrics | Logs | Traces | Health Checks |
-|---|---:|---:|---:|---:|
-| Next.js frontend | Yes | Yes | Yes | Yes |
-| FastAPI backend | Yes | Yes | Yes | Yes |
-| Python worker | Yes | Yes | Yes | Yes |
-| PostgreSQL | Yes | Yes | Limited | Yes |
-| Redis | Yes | Yes | Limited | Yes |
-| Jenkins | Yes | Yes | Optional | Yes |
-| Argo CD | Yes | Yes | Optional | Yes |
-| EKS | Yes | Yes | Optional | Yes |
-| ALB | Yes | Access logs | No | Yes |
-| RDS | Yes | Yes | No | Yes |
+```mermaid
+flowchart TB
+    USER[User Browser]
+    FRONTEND[Next.js Frontend]
+    API[FastAPI Backend]
+    WORKER[Python Worker]
+    DB[(RDS PostgreSQL)]
+    REDIS[(ElastiCache Redis)]
+
+    PROM[Prometheus]
+    GRAFANA[Grafana]
+    LOKI[Loki or Central Log Backend]
+    OTEL[OpenTelemetry Collector]
+    TEMPO[Tempo or Trace Backend]
+    CW[CloudWatch]
+    ALERTS[Alertmanager / Notification Layer]
+
+    FRONTEND --> API
+    API --> DB
+    WORKER --> DB
+
+    API -. future metrics .-> PROM
+    WORKER -. future metrics .-> PROM
+
+    API -. future logs .-> LOKI
+    WORKER -. future logs .-> LOKI
+
+    FRONTEND -. future traces .-> OTEL
+    API -. future traces .-> OTEL
+    WORKER -. future traces .-> OTEL
+
+    OTEL -. future .-> TEMPO
+
+    PROM -. future .-> GRAFANA
+    LOKI -. future .-> GRAFANA
+    TEMPO -. future .-> GRAFANA
+
+    PROM -. future .-> ALERTS
+    ALERTS -. future .-> SLACK[Slack]
+
+    AWS[AWS Services] --> CW
+```
+
+Dashed connections represent planned rather than validated runtime
+capabilities.
 
 ---
 
-## 7. Health Endpoints
+## 7. Implemented Versus Planned Components
 
-### Backend Liveness
+| Capability | Current Status |
+|---|---|
+| FastAPI liveness endpoint | Implemented |
+| FastAPI readiness endpoint | Implemented |
+| PostgreSQL readiness check | Implemented |
+| Kubernetes readiness probes | Implemented |
+| Kubernetes liveness probes | Implemented |
+| Backend logs | Implemented |
+| Worker logs | Implemented |
+| Frontend availability check | Implemented |
+| Argo CD sync status | Implemented |
+| Argo CD health status | Implemented |
+| Migration-hook status | Implemented |
+| Terraform drift validation | Implemented |
+| ALB HTTP/HTTPS validation | Implemented |
+| Prometheus application metrics | Planned |
+| Grafana dashboards | Planned |
+| Loki centralized logging | Planned |
+| OpenTelemetry tracing | Planned |
+| Tempo trace backend | Planned |
+| Alertmanager | Planned |
+| Formal SLO dashboards | Planned |
+| Synthetic authenticated monitoring | Planned |
+| Central CloudWatch log aggregation | Future expansion |
+
+---
+
+## 8. Backend Liveness
+
+Endpoint:
 
 ```http
 GET /health/live
@@ -263,20 +403,31 @@ GET /health/live
 
 Purpose:
 
-Confirm that the FastAPI process is running.
+Confirm that the FastAPI process is alive.
 
-Expected response:
+Validated response resembles:
 
 ```json
 {
   "status": "ok",
-  "service": "platform-launchpad-api"
+  "service": "Platform Launchpad API",
+  "version": "1.0.0",
+  "environment": "development"
 }
 ```
 
-The liveness endpoint must not perform expensive dependency checks.
+The liveness endpoint should remain lightweight.
 
-### Backend Readiness
+It should not perform expensive dependency checks.
+
+A temporary database failure should not cause Kubernetes to repeatedly restart
+an otherwise functioning API process.
+
+---
+
+## 9. Backend Readiness
+
+Endpoint:
 
 ```http
 GET /health/ready
@@ -284,57 +435,835 @@ GET /health/ready
 
 Purpose:
 
-Confirm that the backend can serve traffic.
+Determine whether the backend is ready to receive traffic.
 
-Checks may include:
+The current validated readiness dependency is PostgreSQL.
 
-- PostgreSQL
-- Redis when introduced
-
-Expected response:
+Validated response:
 
 ```json
 {
   "status": "ready",
   "checks": {
-    "database": "ok",
-    "redis": "ok"
+    "database": "ok"
   }
 }
 ```
 
-Readiness must return `503` when a required dependency is unavailable.
+Redis is **not** currently part of application readiness because the deployed
+worker uses database-backed polling rather than Redis as its primary
+deployment-request queue.
 
-### Worker Health
+When a required dependency is unavailable, readiness should return an
+appropriate non-success response such as:
 
-The worker should expose or publish:
-
-- Worker process alive
-- Queue connection status
-- Last successful heartbeat
-- Current task count
-- Failed task count
-
-### Frontend Health
-
-The frontend should expose a lightweight health route suitable for load-balancer and Kubernetes probes.
+```text
+503 Service Unavailable
+```
 
 ---
 
-## 8. Application Metrics
+## 10. Kubernetes Health Probes
 
-### HTTP Metrics
+The backend uses Kubernetes liveness and readiness probes.
 
-The FastAPI backend should expose:
+Representative configuration:
 
-- Request count
-- Error count
-- Request duration
-- In-progress requests
-- Response status count
-- Route-level latency
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
 
-Example metric names:
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 20
+```
+
+The probes allow Kubernetes to distinguish:
+
+```text
+Process unhealthy
+        |
+        v
+Restart may be appropriate
+```
+
+from:
+
+```text
+Dependency unavailable
+        |
+        v
+Remove pod from ready endpoints
+```
+
+---
+
+## 11. Frontend Health
+
+The frontend currently provides operational visibility through:
+
+- Kubernetes pod status;
+- Deployment availability;
+- service health;
+- ALB routing;
+- public HTTPS requests.
+
+A simple public validation is:
+
+```bash
+curl -I \
+  https://launchpad.christineadelusi.com/
+```
+
+The validated development endpoint returns:
+
+```text
+HTTP/2 200
+```
+
+A dedicated application-specific frontend health route may be introduced later
+if operational needs justify it.
+
+---
+
+## 12. Worker Health
+
+The worker currently exposes health primarily through:
+
+- Kubernetes pod state;
+- restart count;
+- container logs;
+- successful request-processing messages;
+- resulting deployment-request state.
+
+Example validated worker log:
+
+```text
+Processed deployment request <request-id> with status succeeded.
+```
+
+The worker currently polls PostgreSQL for deployment requests.
+
+Therefore, the most important present worker-health questions are:
+
+- Is the worker pod running?
+- Is it restarting?
+- Is polling continuing?
+- Are requests being discovered?
+- Are requests completing?
+- Are requests failing?
+- Are requests stuck in queued or processing state?
+
+Future metrics may formalize these signals.
+
+---
+
+## 13. Worker Health Commands
+
+Current validation:
+
+```bash
+kubectl get pods \
+  -n platform-launchpad
+```
+
+Worker logs:
+
+```bash
+kubectl logs \
+  -n platform-launchpad \
+  deployment/worker \
+  --tail=100
+```
+
+Live worker logs:
+
+```bash
+kubectl logs \
+  -n platform-launchpad \
+  deployment/worker \
+  -f
+```
+
+These commands currently provide direct evidence of worker operation.
+
+---
+
+## 14. Backend Logs
+
+Backend logs expose:
+
+- HTTP method;
+- path;
+- response status;
+- client connection information;
+- health-check requests;
+- API lifecycle activity.
+
+Example:
+
+```text
+POST /api/v1/environments/<id>/deployment-requests HTTP/1.1" 202 Accepted
+```
+
+followed by worker processing provides an observable application workflow.
+
+Backend logs must not include sensitive authorization or secret values.
+
+---
+
+## 15. Worker Logs
+
+Worker logs should record significant lifecycle activity.
+
+Useful events include:
+
+- worker started;
+- poll interval;
+- request claimed;
+- request processing started;
+- request succeeded;
+- request failed;
+- retry scheduled;
+- unexpected exception.
+
+Example:
+
+```text
+Deployment worker started with poll interval 5.00 seconds.
+```
+
+and:
+
+```text
+Processed deployment request <id> with status succeeded.
+```
+
+These logs are currently one of the strongest observability signals for the
+asynchronous processing layer.
+
+---
+
+## 16. Structured Logging Target
+
+Application logs should evolve toward structured JSON.
+
+Example:
+
+```json
+{
+  "timestamp": "2026-09-04T05:57:28Z",
+  "level": "INFO",
+  "service": "platform-launchpad-worker",
+  "environment": "development",
+  "message": "Deployment request processed",
+  "deployment_request_id": "example-id",
+  "status": "succeeded"
+}
+```
+
+Useful fields may include:
+
+- timestamp;
+- level;
+- service;
+- environment;
+- request ID;
+- trace ID;
+- environment ID;
+- deployment request ID;
+- operation;
+- status.
+
+---
+
+## 17. Log Levels
+
+### DEBUG
+
+Used for controlled development troubleshooting.
+
+Must not expose secrets.
+
+### INFO
+
+Normal lifecycle activity.
+
+Examples:
+
+- application startup;
+- request accepted;
+- request completed;
+- worker started;
+- deployment request succeeded.
+
+### WARNING
+
+Recoverable conditions.
+
+Examples:
+
+- retry scheduled;
+- elevated processing time;
+- repeated authentication failure;
+- transient dependency failure.
+
+### ERROR
+
+Failed operations.
+
+Examples:
+
+- database connection failure;
+- deployment-request processing failure;
+- unhandled API error.
+
+### CRITICAL
+
+Platform-wide or sustained severe failure.
+
+Examples:
+
+- persistent database outage;
+- widespread authentication failure;
+- multiple critical dependencies unavailable.
+
+---
+
+## 18. Log Redaction
+
+Logs must exclude or redact:
+
+```text
+password
+password_hash
+access_token
+refresh_token
+authorization
+cookie
+secret_key
+database password
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+private keys
+```
+
+Complete `DATABASE_URL` values should not be emitted when they contain
+credentials.
+
+---
+
+## 19. Request Correlation
+
+The target API model should propagate a request identifier such as:
+
+```http
+X-Request-ID: req_example
+```
+
+The identifier should be:
+
+1. generated when absent;
+2. returned to the client;
+3. placed in API logs;
+4. attached to relevant errors;
+5. propagated where practical to background processing.
+
+This provides a correlation path between synchronous API requests and
+asynchronous work.
+
+---
+
+## 20. Audit Logs Versus Runtime Logs
+
+Audit logs and runtime logs serve different purposes.
+
+### Audit Logs
+
+Answer:
+
+```text
+Who did what, to which resource, and when?
+```
+
+Audit data belongs in durable application storage.
+
+Examples:
+
+- registration;
+- environment creation;
+- lifecycle requests;
+- administrative actions.
+
+### Runtime Logs
+
+Answer:
+
+```text
+What happened inside the software while processing the operation?
+```
+
+Examples:
+
+- HTTP request completed;
+- database dependency failed;
+- worker processed request;
+- exception raised.
+
+Runtime logs should not replace application audit history.
+
+---
+
+## 21. Argo CD Observability
+
+Argo CD provides important deployment-health telemetry even before a dedicated
+metrics stack exists.
+
+Current command:
+
+```bash
+kubectl get applications \
+  -n argocd
+```
+
+Validated state:
+
+```text
+NAME                                       SYNC STATUS   HEALTH STATUS
+aws-load-balancer-controller-development   Synced        Healthy
+platform-launchpad-development             Synced        Healthy
+```
+
+These states provide immediate answers to:
+
+```text
+Does cluster state match Git?
+```
+
+and:
+
+```text
+Is the reconciled application healthy?
+```
+
+---
+
+## 22. Argo CD Operation Visibility
+
+Detailed sync information can be retrieved from:
+
+```bash
+kubectl get application \
+  platform-launchpad-development \
+  -n argocd \
+  -o json
+```
+
+Important fields include:
+
+- sync revision;
+- sync status;
+- health status;
+- operation phase;
+- operation message;
+- resource sync results;
+- hook phase.
+
+This has been used to verify database migration execution.
+
+---
+
+## 23. Database Migration Observability
+
+The database migration Job runs as an Argo CD Sync hook.
+
+Operational evidence includes:
+
+```text
+kind: Job
+name: database-migration
+hookType: Sync
+hookPhase: Succeeded
+status: Synced
+```
+
+Argo CD therefore provides deployment-level visibility into schema migration
+success or failure.
+
+A migration failure should be treated as a deployment failure.
+
+---
+
+## 24. Kubernetes Workload Visibility
+
+Current workload visibility uses:
+
+```bash
+kubectl get pods \
+  -n platform-launchpad
+```
+
+and:
+
+```bash
+kubectl get deployments \
+  -n platform-launchpad
+```
+
+Important fields include:
+
+- READY;
+- STATUS;
+- RESTARTS;
+- AVAILABLE;
+- UP-TO-DATE;
+- AGE.
+
+Unexpected restarts should trigger investigation even if the current pod is
+healthy.
+
+---
+
+## 25. Kubernetes Event Visibility
+
+For workload problems:
+
+```bash
+kubectl describe pod \
+  <pod-name> \
+  -n platform-launchpad
+```
+
+or:
+
+```bash
+kubectl get events \
+  -n platform-launchpad \
+  --sort-by=.lastTimestamp
+```
+
+may reveal:
+
+- image-pull failures;
+- scheduling problems;
+- probe failures;
+- secret-mount failures;
+- volume failures;
+- resource pressure.
+
+---
+
+## 26. AWS Load Balancer Visibility
+
+Current edge validation uses:
+
+```bash
+curl -I \
+  http://launchpad.christineadelusi.com/
+```
+
+Expected:
+
+```text
+301 Moved Permanently
+Location: https://...
+```
+
+HTTPS validation:
+
+```bash
+curl -I \
+  https://launchpad.christineadelusi.com/
+```
+
+Expected:
+
+```text
+HTTP/2 200
+```
+
+These checks validate:
+
+- DNS;
+- ALB reachability;
+- HTTP listener;
+- HTTPS listener;
+- TLS certificate;
+- ingress routing;
+- frontend availability.
+
+---
+
+## 27. Backend Public Readiness
+
+Public-path dependency validation:
+
+```bash
+curl -sS \
+  https://launchpad.christineadelusi.com/health/ready
+```
+
+Expected:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": "ok"
+  }
+}
+```
+
+This validates significantly more than an isolated pod check because traffic
+passes through:
+
+```text
+DNS
+ |
+ v
+ALB
+ |
+ v
+Ingress
+ |
+ v
+Backend Service
+ |
+ v
+Backend Pod
+ |
+ v
+RDS
+```
+
+---
+
+## 28. Terraform as Operational Telemetry
+
+Terraform itself provides an important infrastructure signal.
+
+Command:
+
+```bash
+terraform plan
+```
+
+Validated stable result:
+
+```text
+No changes. Your infrastructure matches the configuration.
+```
+
+A non-empty unexpected plan is a drift signal.
+
+Terraform therefore contributes to operational visibility even though it is
+not a metrics system.
+
+---
+
+## 29. Infrastructure Drift Signal
+
+Terraform drift monitoring asks:
+
+```text
+Does actual AWS infrastructure still match declared infrastructure?
+```
+
+Unexpected differences should be investigated for:
+
+- manual console changes;
+- failed previous operations;
+- provider behavior;
+- external controller changes;
+- stale Terraform configuration.
+
+Drift validation is particularly important before:
+
+- releases;
+- environment teardown;
+- infrastructure changes;
+- portfolio demonstrations.
+
+---
+
+## 30. End-to-End Functional Signal
+
+The strongest current health signal is a successful user workflow.
+
+Validated workflow:
+
+```text
+User
+ |
+ v
+Frontend
+ |
+ v
+FastAPI
+ |
+ v
+Deployment Request
+ |
+ v
+PostgreSQL
+ |
+ v
+Worker Polling
+ |
+ v
+Processing
+ |
+ v
+Succeeded
+```
+
+This validates the combined health of:
+
+- public routing;
+- frontend;
+- backend;
+- authentication;
+- database;
+- deployment-request persistence;
+- worker;
+- state transitions.
+
+Synthetic monitoring can automate this flow in the future.
+
+---
+
+# Planned Metrics Architecture
+
+## 31. Prometheus
+
+Prometheus is the planned metrics backend.
+
+Potential metric sources include:
+
+- FastAPI;
+- Python worker;
+- Kubernetes;
+- kube-state-metrics;
+- node exporter;
+- PostgreSQL exporter;
+- Redis exporter where useful.
+
+Prometheus is **not currently represented as a validated Platform Launchpad
+runtime service**.
+
+---
+
+## 32. Grafana
+
+Grafana is the planned dashboard and visualization layer.
+
+Potential dashboards include:
+
+- application overview;
+- API performance;
+- authentication;
+- worker processing;
+- deployment-request lifecycle;
+- Kubernetes health;
+- RDS;
+- ALB;
+- GitOps;
+- CI/CD.
+
+Grafana should not be listed as currently deployed until that phase has been
+implemented and validated.
+
+---
+
+## 33. Loki
+
+Loki is a possible centralized logging backend.
+
+Potential sources:
+
+- FastAPI;
+- worker;
+- frontend server logs;
+- Kubernetes workloads.
+
+CloudWatch Logs or another centralized logging solution could be used instead.
+
+The final backend should be selected based on operational needs and cost.
+
+---
+
+## 34. OpenTelemetry
+
+OpenTelemetry is the preferred future instrumentation standard.
+
+OpenTelemetry can provide:
+
+- trace propagation;
+- service instrumentation;
+- vendor-neutral telemetry;
+- future metrics/log integration.
+
+An OpenTelemetry Collector may centralize telemetry export.
+
+This aligns with ADR-0013 but remains future runtime work until deployed.
+
+---
+
+## 35. Tempo
+
+Tempo is a potential distributed-trace backend.
+
+Alternative trace backends could also satisfy the design.
+
+The key architectural requirement is trace correlation rather than dependence
+on one vendor.
+
+---
+
+## 36. CloudWatch
+
+CloudWatch may provide AWS-native telemetry for:
+
+- EKS;
+- RDS;
+- ALB;
+- node resources;
+- AWS service metrics;
+- CloudWatch Logs;
+- alarms.
+
+CloudWatch integration should be introduced selectively to avoid excessive
+cost.
+
+---
+
+## 37. Alertmanager
+
+Alertmanager is a planned alert-routing component if Prometheus becomes the
+primary metrics platform.
+
+Initial notification integration may use:
+
+```text
+Slack
+```
+
+Alert routing should be designed only after reliable metrics exist.
+
+---
+
+# Planned Application Metrics
+
+## 38. HTTP Metrics
+
+Future FastAPI metrics may include:
 
 ```text
 platform_launchpad_http_requests_total
@@ -343,28 +1272,26 @@ platform_launchpad_http_requests_in_progress
 platform_launchpad_http_responses_total
 ```
 
-Labels should include:
+Recommended bounded labels:
 
-- Service
-- Method
-- Normalized route
-- Status class
+- method;
+- normalized route;
+- status class;
+- service.
 
-Avoid labels containing:
+Do not use:
 
-- Email addresses
-- User names
-- Raw URLs
-- UUIDs
-- Environment names
-
-These values create excessive cardinality.
+- request UUID;
+- environment ID;
+- user ID;
+- email;
+- raw URL.
 
 ---
 
-## 9. Authentication Metrics
+## 39. Authentication Metrics
 
-Recommended metrics:
+Potential metrics:
 
 ```text
 platform_launchpad_auth_registration_total
@@ -374,58 +1301,42 @@ platform_launchpad_auth_disabled_account_denials_total
 platform_launchpad_auth_token_validation_failures_total
 ```
 
-Recommended labels:
+Allowed labels should remain low-cardinality.
 
-- Result
-- Failure reason category
-- Service
-
-Metrics must not include:
-
-- Email address
-- Password
-- JWT
-- Source credentials
-
-Security investigations may use audit logs rather than high-cardinality metric labels.
+Security investigations involving specific users belong in audit logs rather
+than Prometheus labels.
 
 ---
 
-## 10. Environment Lifecycle Metrics
+## 40. Environment Lifecycle Metrics
 
-Recommended metrics:
+Potential metrics:
 
 ```text
 platform_launchpad_environments_total
 platform_launchpad_environment_requests_total
 platform_launchpad_environment_state_transitions_total
-platform_launchpad_environment_provision_duration_seconds
-platform_launchpad_environment_destroy_duration_seconds
 platform_launchpad_environment_failures_total
 ```
 
-Environment-count gauges should expose counts by status:
-
-- Pending
-- Provisioning
-- Active
-- Failed
-- Destroying
-- Destroyed
-
-Example:
+Useful states include:
 
 ```text
-platform_launchpad_environments{status="active"} 12
+pending
+provisioning
+active
+failed
+destroying
+destroyed
 ```
 
-Do not use environment ID or name as a Prometheus label.
+Environment identifiers must not be metric labels.
 
 ---
 
-## 11. Deployment Request Metrics
+## 41. Deployment Request Metrics
 
-Recommended metrics:
+Potential metrics:
 
 ```text
 platform_launchpad_deployment_requests_total
@@ -437,20 +1348,17 @@ platform_launchpad_deployment_requests_in_progress
 
 Useful labels:
 
-- Operation
-- Status
-- Environment type
-- Service
+- operation;
+- result;
+- status.
 
-Avoid labels containing deployment request UUIDs.
-
-Individual request identifiers belong in logs and traces.
+Individual request IDs belong in logs and traces.
 
 ---
 
-## 12. Worker Metrics
+## 42. Worker Metrics
 
-Recommended worker metrics:
+Future worker metrics may include:
 
 ```text
 platform_launchpad_worker_heartbeat_timestamp_seconds
@@ -459,1138 +1367,1204 @@ platform_launchpad_worker_task_duration_seconds
 platform_launchpad_worker_task_failures_total
 platform_launchpad_worker_tasks_in_progress
 platform_launchpad_worker_retries_total
-platform_launchpad_worker_queue_depth
+platform_launchpad_worker_poll_errors_total
 ```
 
-Worker metrics should identify:
+The earlier design included:
 
-- Worker service
-- Task operation
-- Result
-- Retry category
+```text
+worker_queue_depth
+```
+
+because Redis was originally planned as the task queue.
+
+The current implementation uses database-backed polling.
+
+A more accurate future metric would therefore measure:
+
+```text
+queued deployment requests
+processing deployment requests
+oldest queued request age
+poll failures
+```
+
+unless the worker architecture later changes to an explicit queue system.
 
 ---
 
-## 13. Database Metrics
+## 43. PostgreSQL Metrics
 
-PostgreSQL monitoring should include:
+Future PostgreSQL monitoring should include:
 
-- Connection count
-- Maximum connection utilization
-- Query duration
-- Transaction rate
-- Transaction failures
-- Deadlocks
-- Disk storage
-- CPU utilization
-- Memory utilization
-- Read and write latency
-- Backup health
-- Replication health if used
+- connections;
+- connection utilization;
+- CPU;
+- storage;
+- read latency;
+- write latency;
+- transactions;
+- deadlocks;
+- failed transactions;
+- backup status.
 
-Application-specific database metrics may include:
+Application-level database metrics may include:
 
 ```text
 platform_launchpad_database_operation_duration_seconds
 platform_launchpad_database_errors_total
 platform_launchpad_database_pool_connections
-platform_launchpad_database_pool_wait_seconds
 ```
 
-SQL statements containing sensitive values must not be logged.
+Sensitive SQL values must not be logged.
 
 ---
 
-## 14. Redis Metrics
+## 44. Redis Metrics
 
-Redis monitoring should include:
+Redis is provisioned infrastructure but is not currently the deployment
+worker's primary queue.
 
-- Queue depth
-- Connection health
-- Memory usage
-- Evictions
-- Command latency
-- Failed commands
-- Key expiration
-- Worker consumption rate
+Relevant Redis metrics may therefore include:
 
-Application queue metrics must distinguish between:
+- connection health;
+- memory;
+- evictions;
+- command latency;
+- key count;
+- errors.
 
-- Queued
-- Processing
-- Failed
-- Retried
-- Completed
+Queue-depth metrics should only be introduced if Redis actually becomes the
+application work queue.
 
 ---
 
-## 15. Frontend Metrics
+## 45. Frontend Metrics
 
-Frontend telemetry may include:
+Future frontend telemetry may include:
 
-- Page-load duration
-- Core Web Vitals
-- API request failures
-- JavaScript exceptions
-- Route-transition latency
-- Authentication redirect failures
-- Environment-form submission success rate
+- page-load latency;
+- Core Web Vitals;
+- JavaScript failures;
+- API failures;
+- navigation latency;
+- authentication redirect failures;
+- environment-form submission outcomes.
 
-User privacy must be preserved.
+Browser telemetry must not contain:
 
-Frontend telemetry must not include:
-
-- Passwords
-- JWTs
-- Full sensitive form contents
-- Secret values
-- Unredacted email addresses
+- passwords;
+- JWTs;
+- secret values;
+- sensitive form content.
 
 ---
 
-## 16. Structured Logging
+# Distributed Tracing
 
-Application logs should use structured JSON.
+## 46. Target Trace Flow
 
-Example:
-
-```json
-{
-  "timestamp": "2026-07-12T18:30:00Z",
-  "level": "INFO",
-  "service": "platform-launchpad-api",
-  "environment": "development",
-  "message": "Environment request accepted",
-  "request_id": "req_8c071f3102a24fbb",
-  "trace_id": "9ab7f51c8f394d3a",
-  "user_id": "7ce8938a-4055-439b-b941-794682a72463",
-  "environment_id": "397f1cc1-2750-4182-94a8-c7c53de71df4",
-  "deployment_request_id": "4df37e1a-e920-41ca-9548-b170d0043dcf",
-  "operation": "provision"
-}
-```
-
-Logs should be machine-readable and human-understandable.
-
----
-
-## 17. Log Levels
-
-### DEBUG
-
-Used for local development and controlled troubleshooting.
-
-Must not expose sensitive values.
-
-### INFO
-
-Used for normal lifecycle events.
-
-Examples:
-
-- Service started
-- Request completed
-- Environment created
-- Worker task started
-- Worker task completed
-- GitOps update observed
-
-### WARNING
-
-Used for recoverable or suspicious conditions.
-
-Examples:
-
-- Retry scheduled
-- Slow query
-- Queue depth elevated
-- Repeated login failure
-- Temporary dependency failure
-
-### ERROR
-
-Used for failed operations.
-
-Examples:
-
-- Provisioning failed
-- Database connection failed
-- Redis unavailable
-- Deployment request failed
-- Unhandled application exception
-
-### CRITICAL
-
-Used for severe platform-wide conditions.
-
-Examples:
-
-- Database unavailable for sustained period
-- Corrupted state
-- Widespread authentication failure
-- Multiple critical dependencies unavailable
-
----
-
-## 18. Log Redaction
-
-Logs must redact or exclude:
-
-- `password`
-- `password_hash`
-- `access_token`
-- `refresh_token`
-- `authorization`
-- `cookie`
-- `secret`
-- `api_key`
-- AWS credentials
-- Database connection passwords
-- Private keys
-
-A centralized logging filter should prevent accidental exposure where practical.
-
----
-
-## 19. Request Correlation
-
-Every API request should have an `X-Request-ID`.
-
-Behavior:
-
-1. Accept a valid client-provided request ID where permitted.
-2. Generate one when absent.
-3. Return it in the response.
-4. Include it in logs.
-5. Include it in error responses.
-6. Propagate it into worker tasks.
-7. Include it in downstream HTTP calls where applicable.
-
-Example:
-
-```http
-X-Request-ID: req_8c071f3102a24fbb
-```
-
----
-
-## 20. Distributed Tracing
-
-OpenTelemetry tracing should cover:
-
-- Frontend API call
-- FastAPI request handling
-- Authentication validation
-- Database operation
-- Redis queue publication
-- Worker task consumption
-- Worker database update
-- External integration calls
-
-A typical trace may show:
+A future trace may follow:
 
 ```text
-Browser request
-  └── FastAPI endpoint
-      ├── JWT validation
-      ├── PostgreSQL insert
-      ├── Audit event insert
-      └── Redis task publish
-          └── Worker task
-              ├── State transition
-              ├── Simulated provisioning
-              └── PostgreSQL update
+Browser
+  |
+  v
+FastAPI request
+  |
+  +--> Authentication
+  |
+  +--> PostgreSQL
+  |
+  +--> Deployment request created
+
+Worker poll
+  |
+  +--> Deployment request claimed
+  |
+  +--> Processing
+  |
+  +--> PostgreSQL state update
 ```
 
-Trace context should propagate through the queue where supported.
+This replaces the earlier trace model that assumed Redis queue publication and
+consumption.
 
 ---
 
-## 21. Trace Sampling
+## 47. Trace Context
 
-Local development may use:
+Useful trace attributes may include:
+
+- service;
+- route;
+- deployment operation;
+- result;
+- environment type.
+
+High-cardinality resource identifiers may appear in traces where operationally
+useful, subject to privacy and cost controls.
+
+Sensitive values must never be trace attributes.
+
+---
+
+## 48. Trace Sampling
+
+Local development may use higher sampling.
+
+Hosted environments should use controlled sampling.
+
+Potential strategy:
+
+- sample a small percentage of successful requests;
+- sample failures more aggressively;
+- sample slow requests;
+- sample critical lifecycle operations.
+
+Sampling should be configurable.
+
+---
+
+# Dashboards
+
+## 49. Application Overview Dashboard
+
+A future dashboard may include:
+
+- frontend availability;
+- API request rate;
+- API error rate;
+- API latency;
+- database readiness;
+- queued deployment requests;
+- successful deployment requests;
+- failed deployment requests;
+- worker health.
+
+---
+
+## 50. Worker Dashboard
+
+Potential panels:
+
+- worker pod availability;
+- successful operations;
+- failed operations;
+- processing duration;
+- requests queued;
+- oldest queued request;
+- retries;
+- poll failures.
+
+This dashboard should reflect the database-backed polling architecture.
+
+---
+
+## 51. Kubernetes Dashboard
+
+Potential signals:
+
+- node readiness;
+- pod readiness;
+- restarts;
+- CPU;
+- memory;
+- Deployment availability;
+- unschedulable pods;
+- failing probes;
+- resource saturation.
+
+---
+
+## 52. GitOps Dashboard
+
+Potential signals:
+
+- Argo CD sync status;
+- Argo CD health;
+- current Git revision;
+- failed syncs;
+- migration hook failures;
+- reconciliation duration;
+- out-of-sync applications.
+
+---
+
+## 53. Database Dashboard
+
+Potential RDS signals:
+
+- CPU;
+- storage;
+- connections;
+- read/write latency;
+- transaction rate;
+- failed connections;
+- backup health.
+
+---
+
+## 54. ALB Dashboard
+
+Potential ALB signals:
+
+- request count;
+- HTTP 4xx;
+- HTTP 5xx;
+- target response time;
+- healthy targets;
+- unhealthy targets;
+- rejected connections.
+
+---
+
+## 55. CI/CD Dashboard
+
+Potential pipeline telemetry:
+
+- Jenkins build success;
+- Jenkins build failure;
+- build duration;
+- image publication success;
+- GitOps update success;
+- deployment health;
+- rollback count.
+
+---
+
+# Alerting
+
+## 56. Alert Design
+
+Alerts should represent conditions requiring operator attention.
+
+A useful alert includes:
 
 ```text
-100 percent sampling
+Condition
+Impact
+Service
+Environment
+Duration
+Investigation URL or command
+Runbook
 ```
 
-Hosted environments should use configurable sampling.
-
-Potential policy:
-
-- Sample a small percentage of successful requests.
-- Sample all failed requests where practical.
-- Sample all slow requests.
-- Sample environment lifecycle operations at a higher rate.
-
-Sampling must account for telemetry cost.
-
 ---
 
-## 22. Audit Logs versus Application Logs
-
-Audit logs and application logs serve different purposes.
-
-### Audit Logs
-
-Record:
-
-- Who performed an action
-- What resource was affected
-- What action occurred
-- Whether it succeeded
-- When it occurred
-
-Audit logs are stored in PostgreSQL and exposed only to administrators.
-
-### Application Logs
-
-Record:
-
-- Runtime behavior
-- Diagnostic events
-- Exceptions
-- Dependency failures
-- Performance information
-
-Application logs are stored in Loki or CloudWatch.
-
-Audit logs must not be replaced by transient application logs.
-
----
-
-## 23. Dashboard Strategy
-
-Initial Grafana dashboards:
-
-1. Platform Overview
-2. Backend API
-3. Worker and Queue
-4. Environment Lifecycle
-5. PostgreSQL
-6. Redis
-7. Kubernetes Workloads
-8. CI/CD and GitOps
-9. Security Activity
-10. AWS Cost and Capacity Overview
-
----
-
-## 24. Platform Overview Dashboard
-
-Primary panels:
-
-- API availability
-- Frontend availability
-- Active users
-- Request rate
-- Error rate
-- P95 latency
-- Active environments
-- Failed environments
-- Provisioning requests
-- Worker queue depth
-- Worker failures
-- Database health
-- Argo CD application health
-- Current deployed version
-
-This should be the primary demonstration dashboard.
-
----
-
-## 25. Backend API Dashboard
-
-Panels:
-
-- Requests per second
-- Responses by status
-- Error rate
-- P50 latency
-- P95 latency
-- P99 latency
-- Requests in progress
-- Authentication failures
-- Slowest routes
-- Database-operation duration
-- Dependency errors
-- Pod CPU and memory
-
----
-
-## 26. Worker and Queue Dashboard
-
-Panels:
-
-- Queue depth
-- Active workers
-- Worker heartbeat
-- Tasks started
-- Tasks completed
-- Tasks failed
-- Retry count
-- Average task duration
-- P95 task duration
-- Tasks by operation
-- Oldest queued task age
-- Worker CPU and memory
-
----
-
-## 27. Environment Lifecycle Dashboard
-
-Panels:
-
-- Environments by status
-- Environment requests by type
-- Provisioning success rate
-- Provisioning failure rate
-- Average provisioning duration
-- Destruction duration
-- Failed state transitions
-- Requests currently processing
-- Retry frequency
-- Historical lifecycle trend
-
----
-
-## 28. PostgreSQL Dashboard
-
-Panels:
-
-- Database availability
-- CPU
-- Memory
-- Connections
-- Connection utilization
-- Storage
-- Read latency
-- Write latency
-- Transaction rate
-- Transaction failures
-- Deadlocks
-- Slow queries
-- Backup status
-
----
-
-## 29. Kubernetes Dashboard
-
-Panels:
-
-- Pod health
-- Pod restarts
-- Deployment replicas
-- CPU requests and usage
-- Memory requests and usage
-- HPA status
-- Node capacity
-- Pending Pods
-- Failed Pods
-- Container OOM events
-- Ingress request rate
-- Namespace resource consumption
-
----
-
-## 30. CI/CD and GitOps Dashboard
-
-Panels:
-
-- Jenkins pipeline success rate
-- Pipeline duration
-- Pipeline failures by stage
-- Test failures
-- Security gate failures
-- Container-build duration
-- Deployment frequency
-- GitOps update frequency
-- Argo CD sync status
-- Argo CD application health
-- Rollback count
-- Mean time to recovery
-- Current image digest
-
----
-
-## 31. Security Activity Dashboard
-
-Panels:
-
-- Login attempts
-- Login failures
-- Disabled-account denials
-- Permission denials
-- Administrative actions
-- User disable events
-- Status override events
-- Repeated failures by source category
-- Secret-scan pipeline failures
-- Dependency vulnerabilities
-- Container scan failures
-
-Sensitive identities should be handled carefully.
-
----
-
-## 32. Service-Level Indicators
-
-Initial service-level indicators include:
-
-### Availability
-
-Percentage of successful valid requests served by the API.
-
-### Latency
-
-Percentage of requests completed within the target latency threshold.
-
-### Error Rate
-
-Percentage of requests returning unexpected server errors.
-
-### Provisioning Success
-
-Percentage of environment-provision requests that complete successfully.
-
-### Provisioning Duration
-
-Time from request acceptance to active environment state.
-
-### Worker Health
-
-Percentage of time at least one worker is healthy and processing tasks.
-
-### Deployment Health
-
-Percentage of GitOps deployments reaching a healthy state.
-
----
-
-## 33. Initial Service-Level Objectives
-
-These are portfolio targets rather than formal production commitments.
-
-### API Availability
-
-```text
-99.0 percent over a rolling 30-day period
-```
-
-### API Latency
-
-```text
-95 percent of standard API requests complete within 500 ms
-```
-
-Long-running environment provisioning is excluded because it is asynchronous.
-
-### Provisioning Success
-
-```text
-95 percent of valid simulated provisioning requests succeed without manual intervention
-```
-
-### Worker Processing
-
-```text
-95 percent of queued tasks begin processing within 60 seconds
-```
-
-### Deployment Health
-
-```text
-95 percent of approved GitOps changes become healthy within 10 minutes
-```
-
-These targets will be reviewed after real telemetry is available.
-
----
-
-## 34. Alert Severity
+## 57. Alert Severity
 
 ### Informational
 
-No immediate action required.
-
-Examples:
-
-- Deployment completed
-- Environment created
-- Budget threshold approaching
+No immediate response required.
 
 ### Warning
 
-Investigation required during normal operational response.
-
-Examples:
-
-- Elevated API latency
-- Queue depth increasing
-- Worker retries increasing
-- Disk capacity approaching threshold
+Service degradation or approaching limits.
 
 ### Critical
 
-Immediate action required.
-
-Examples:
-
-- API unavailable
-- Database unavailable
-- No healthy workers
-- Sustained high error rate
-- Argo CD application degraded
-- RDS storage critically low
+Significant user impact or platform availability risk.
 
 ---
 
-## 35. Initial Alert Rules
+## 58. Candidate API Alerts
 
-### API Availability Alert
+Potential alerts:
 
-Trigger when:
+### API Unavailable
+
+Condition:
 
 ```text
-API success rate drops below the defined threshold for five minutes.
+backend readiness failing consistently
 ```
 
-### Elevated Error Rate
+### High API Error Rate
 
-Trigger when:
+Condition:
 
 ```text
-5xx responses exceed 5 percent for five minutes.
+5xx error rate exceeds threshold
 ```
 
-### High Latency
+### High API Latency
 
-Trigger when:
-
-```text
-P95 API latency exceeds 1 second for ten minutes.
-```
-
-### Database Unavailable
-
-Trigger when:
+Condition:
 
 ```text
-Readiness checks report PostgreSQL unavailable for more than two minutes.
-```
-
-### Redis Unavailable
-
-Trigger when:
-
-```text
-Queue publication or worker consumption cannot reach Redis.
-```
-
-### Worker Missing
-
-Trigger when:
-
-```text
-No worker heartbeat is observed for more than two minutes.
-```
-
-### Queue Backlog
-
-Trigger when:
-
-```text
-Queue depth or oldest task age exceeds the defined threshold.
-```
-
-### Provisioning Failure Rate
-
-Trigger when:
-
-```text
-Provisioning failures exceed the accepted percentage in a rolling window.
-```
-
-### Pod Restart Alert
-
-Trigger when:
-
-```text
-A workload repeatedly restarts within a short time window.
-```
-
-### Argo CD Degraded
-
-Trigger when:
-
-```text
-An application remains degraded or out of sync beyond the accepted window.
-```
-
-### RDS Storage Alert
-
-Trigger when:
-
-```text
-Free storage falls below the configured threshold.
+p95 latency exceeds target
 ```
 
 ---
 
-## 36. Alert Routing
+## 59. Candidate Worker Alerts
 
-Initial routing:
+Potential alerts:
 
-| Severity | Destination |
-|---|---|
-| Informational | Dashboard or optional Slack |
-| Warning | Slack platform channel |
-| Critical | Slack platform channel with explicit priority |
+### Worker Unavailable
 
-Future routing may include:
+No healthy worker exists for a defined period.
 
-- Email
-- PagerDuty
-- Opsgenie
-- Incident-management platform
+### Requests Stuck
 
----
+Queued requests exceed a maximum age.
 
-## 37. Alert Message Requirements
+### Worker Failure Rate
 
-Alert notifications should include:
-
-- Alert name
-- Severity
-- Environment
-- Service
-- Time
-- Summary
-- Current value
-- Threshold
-- Dashboard link
-- Log query link
-- Trace link where available
-- Runbook link
-
-Avoid alert messages that contain only a metric name without operational context.
+Deployment-request failure ratio exceeds threshold.
 
 ---
 
-## 38. Runbooks
+## 60. Candidate Database Alerts
 
-Required initial runbooks:
+Potential alerts:
 
-- API unavailable
-- High API error rate
-- PostgreSQL unavailable
-- Redis unavailable
-- Worker not processing
-- Queue backlog
-- Environment provisioning failed
-- Argo CD application degraded
-- Deployment rollback
-- RDS storage pressure
-- Exposed credential
-- Jenkins pipeline failure
-- Terraform apply failure
-
-Each runbook should include:
-
-1. Symptoms
-2. Impact
-3. Validation steps
-4. Investigation commands
-5. Immediate mitigation
-6. Recovery
-7. Escalation
-8. Follow-up actions
+- database readiness failing;
+- connection saturation;
+- low storage;
+- high CPU;
+- excessive latency.
 
 ---
 
-## 39. Kubernetes Observability
+## 61. Candidate Kubernetes Alerts
 
-Kubernetes monitoring should include:
+Potential alerts:
 
-- Kube-state metrics
-- Node metrics
-- Pod metrics
-- Container restarts
-- Deployment health
-- Stateful workload health
-- HPA status
-- Resource requests and limits
-- Pending Pods
-- Failed scheduling
-- OOM kills
-- Ingress metrics
-
-Observability components should use resource limits to avoid destabilizing the cluster.
+- pod crash loop;
+- excessive restart count;
+- Deployment unavailable;
+- node not ready;
+- resource exhaustion.
 
 ---
 
-## 40. AWS Observability
+## 62. Candidate GitOps Alerts
 
-AWS telemetry may include:
+Potential alerts:
 
-### ALB
-
-- Request count
-- Target response time
-- HTTP response codes
-- Unhealthy host count
-- Rejected connections
-
-### RDS
-
-- CPU utilization
-- Free storage
-- Connections
-- Read latency
-- Write latency
-- Deadlocks
-- Backup health
-
-### EKS
-
-- Control-plane logs
-- Node health
-- Cluster events
-- Workload logs
-
-### ECR
-
-- Image scan findings
-- Repository activity
-
-### Budgets
-
-- Cost thresholds
-- Forecasted spend
+- application out of sync;
+- application degraded;
+- synchronization failed;
+- migration hook failed.
 
 ---
 
-## 41. Log Retention
+## 63. Candidate ALB Alerts
 
-Retention must be configurable.
+Potential alerts:
 
-Example starting values:
+- unhealthy targets;
+- elevated 5xx;
+- high target response time;
+- no healthy targets.
 
-| Telemetry | Development | Production-Style |
+---
+
+## 64. Alert Routing
+
+Initial future routing may use:
+
+```text
+Slack
+```
+
+Later routing may distinguish:
+
+- application;
+- platform;
+- security;
+- database;
+- deployment.
+
+Alert routing should avoid unnecessary notification noise.
+
+---
+
+# SLO Design
+
+## 65. Service-Level Indicators
+
+Potential SLIs include:
+
+### API Availability
+
+Successful requests divided by valid requests.
+
+### API Latency
+
+Percentage of requests below target latency.
+
+### Worker Processing
+
+Percentage of accepted deployment requests completed successfully within an
+expected interval.
+
+### Deployment Health
+
+Percentage of approved GitOps changes reaching healthy state.
+
+---
+
+## 66. Initial SLO Candidates
+
+Potential future targets may include:
+
+```text
+API availability:
+    99.9%
+
+API latency:
+    95% under defined threshold
+
+Deployment requests:
+    95% complete within expected processing window
+
+GitOps deployments:
+    95% healthy within defined rollout window
+```
+
+These are design targets, not currently measured production SLOs.
+
+Targets should be reviewed after real telemetry exists.
+
+---
+
+# Telemetry Retention
+
+## 67. Retention Strategy
+
+Future retention should reflect value and cost.
+
+Example:
+
+| Telemetry | Development | Longer-Lived Environment |
 |---|---:|---:|
 | Application logs | 7 days | 14–30 days |
 | Worker logs | 7 days | 14–30 days |
-| Audit logs | Indefinite for MVP | Policy-driven |
 | Metrics | 7–15 days | 15–30 days |
-| Traces | 3–7 days | 7–14 days |
-| Jenkins logs | Limited build history | Defined retention |
-| ALB logs | Optional | Defined lifecycle |
+| Traces | Short | Policy-driven |
+| Audit records | Durable | Policy-driven |
+| Jenkins logs | Limited | Defined retention |
+| ALB access logs | Optional | Lifecycle-controlled |
 
-Long retention must be justified against cost.
-
----
-
-## 42. Cardinality Controls
-
-Prometheus labels must not include unbounded identifiers such as:
-
-- User ID
-- Email
-- Environment ID
-- Deployment request ID
-- Request ID
-- Trace ID
-- Raw error message
-- Raw URL
-
-These identifiers belong in logs and traces.
-
-Metric labels should use bounded categories such as:
-
-- Status
-- Operation
-- Role
-- Environment type
-- HTTP method
-- Normalized route
-- Result
+These are design targets rather than current retention guarantees.
 
 ---
 
-## 43. Telemetry Environment Labels
+## 68. Metric Cardinality
 
-Every telemetry signal should identify:
+Prometheus labels must not contain unbounded identifiers such as:
 
-- Service
-- Deployment environment
-- Application version
-- Git commit where practical
-- Image digest where practical
-- Cluster
-- Namespace
+- environment IDs;
+- deployment-request IDs;
+- request IDs;
+- user IDs;
+- email addresses;
+- Git commit values.
 
-This supports release comparison and troubleshooting.
+Use bounded labels such as:
 
----
+```text
+method
+route
+status
+operation
+service
+environment
+result
+```
 
-## 44. Deployment Annotations
-
-Grafana dashboards should display deployment annotations.
-
-Annotations may be generated from:
-
-- Jenkins release
-- GitOps commit
-- Argo CD sync
-- Terraform apply
-- Rollback event
-
-This helps correlate incidents with recent changes.
+High-cardinality identifiers belong in logs or traces.
 
 ---
 
-## 45. CI/CD Metrics
+## 69. Logging Cost
 
-Jenkins telemetry should include:
+Logs should not record every internal detail at `INFO`.
 
-- Build count
-- Success rate
-- Failure rate
-- Build duration
-- Stage duration
-- Queue time
-- Test failures
-- Security scan failures
-- Image-publish failures
-- GitOps update failures
-- Deployment verification failures
+High-volume diagnostic events should use appropriate levels.
 
-DORA-style metrics include:
-
-- Deployment frequency
-- Lead time for change
-- Change failure rate
-- Mean time to recovery
+Production debug logging should remain disabled unless troubleshooting
+requires it.
 
 ---
 
-## 46. Synthetic Monitoring
+## 70. Trace Cost
 
-A lightweight synthetic check may validate:
+Distributed tracing must use sampling appropriate to environment and traffic.
 
-1. Frontend is reachable.
-2. API liveness succeeds.
-3. API readiness succeeds.
-4. Login page renders.
-5. Public documentation is reachable.
+The development environment may use more aggressive sampling during testing.
 
-A future authenticated synthetic flow may:
+Long-lived environments should balance:
 
-1. Authenticate a test user.
-2. Retrieve the environment list.
-3. Validate a test environment.
-4. Log out.
-
-Synthetic users and credentials must be managed securely.
+- troubleshooting value;
+- storage;
+- ingestion cost.
 
 ---
 
-## 47. Observability in Local Development
+# Operational Runbooks
 
-Local development should support:
+## 71. Backend Not Ready
 
-- Console JSON logs
-- FastAPI metrics endpoint
-- Local Prometheus
-- Local Grafana where practical
-- Optional Loki and Tempo
-- Docker Compose health checks
+Initial investigation:
 
-The complete observability stack does not need to run continuously on the developer workstation.
+```bash
+curl -sS \
+  https://launchpad.christineadelusi.com/health/ready
+```
 
-A lightweight profile may run:
+Then:
 
-- PostgreSQL
-- Redis
-- Backend
-- Worker
+```bash
+kubectl get pods \
+  -n platform-launchpad
+```
 
-A full profile may additionally run:
+Then:
 
-- Prometheus
-- Grafana
-- Loki
-- Tempo
-- OpenTelemetry Collector
+```bash
+kubectl logs \
+  -n platform-launchpad \
+  deployment/backend \
+  --tail=100
+```
 
----
+Check:
 
-## 48. Observability Deployment Strategy
-
-Observability resources may be deployed through:
-
-- Helm
-- Kubernetes manifests
-- Terraform-managed Helm releases
-- GitOps-managed applications
-
-The preferred runtime direction is GitOps-managed deployment.
-
-Secrets and credentials must not be embedded in Helm values committed to Git.
+- database connectivity;
+- secret mount;
+- pod events;
+- readiness failures.
 
 ---
 
-## 49. Grafana Access
+## 72. Worker Not Processing Requests
 
-Grafana access must be controlled.
+Check:
 
-Requirements:
+```bash
+kubectl get pods \
+  -n platform-launchpad
+```
 
-- HTTPS
-- Strong authentication
-- Restricted administrative access
-- No default credentials
-- Secret-managed credentials
-- Read-only viewer access where appropriate
+Then:
 
-The public portfolio should not expose unrestricted administrative dashboards.
+```bash
+kubectl logs \
+  -n platform-launchpad \
+  deployment/worker \
+  --tail=100
+```
 
----
+Investigate:
 
-## 50. Failure Investigation Workflow
+- worker restart count;
+- database connectivity;
+- queued requests;
+- processing failures;
+- secret access.
 
-A standard investigation flow:
-
-1. Confirm user impact.
-2. Check platform overview dashboard.
-3. Identify affected service.
-4. Review recent deployments.
-5. Review relevant metrics.
-6. Search logs using request, environment, or deployment request ID.
-7. Open related trace.
-8. Check dependency health.
-9. Apply mitigation.
-10. Confirm recovery.
-11. Document findings.
+Redis queue depth is not part of the current investigation path because the
+worker uses database-backed polling.
 
 ---
 
-## 51. Example Troubleshooting Correlation
+## 73. Application Returns HTTP Error
 
-A user reports that an environment is stuck in `provisioning`.
+Validate:
 
-Investigation:
+```bash
+curl -I \
+  https://launchpad.christineadelusi.com/
+```
 
-1. Obtain environment ID from the UI.
-2. Retrieve the latest deployment request.
-3. Search logs using deployment request ID.
-4. Review worker task trace.
-5. Check worker heartbeat.
-6. Check Redis queue depth.
-7. Check database update failures.
-8. Review environment state-transition metrics.
-9. Retry only after confirming no active worker task remains.
+Then inspect:
 
-This correlation pattern is a primary reason identifiers must propagate through telemetry.
+```bash
+kubectl get ingress \
+  -n platform-launchpad
+```
 
----
+and:
 
-## 52. Privacy and Data Handling
+```bash
+kubectl describe ingress \
+  platform-launchpad \
+  -n platform-launchpad
+```
 
-Telemetry should minimize personal information.
+Check:
 
-User email addresses should not become Prometheus labels.
-
-Where user identity is required for audit:
-
-- Store the user ID.
-- Restrict audit-log access.
-- Avoid unnecessary duplication.
-- Apply retention rules.
-
-Hosted telemetry services must be reviewed before sending application data externally.
+- DNS;
+- ALB;
+- listener;
+- target health;
+- ingress rules;
+- frontend/backend service availability.
 
 ---
 
-## 53. Testing Observability
+## 74. Argo CD Degraded
 
-Required test categories:
+Check:
 
-### Metrics Tests
+```bash
+kubectl get applications \
+  -n argocd
+```
 
-- Metrics endpoint responds.
-- Required metrics exist.
-- Labels remain bounded.
-- Sensitive values are absent.
+Inspect the affected Application:
 
-### Logging Tests
+```bash
+kubectl describe application \
+  platform-launchpad-development \
+  -n argocd
+```
 
-- Logs are structured.
-- Request ID is present.
-- Sensitive fields are redacted.
-- Exceptions are correlated.
+Investigate:
 
-### Trace Tests
-
-- Trace IDs propagate.
-- Database spans appear.
-- Worker spans correlate with API requests.
-
-### Alert Tests
-
-- Alert rules parse.
-- Test conditions trigger expected alerts.
-- Alert messages include runbook references.
-
-### Dashboard Tests
-
-- Dashboards provision successfully.
-- Queries return expected data.
-- Variables work.
-- Panels do not depend on unavailable labels.
+- Git revision;
+- failed resource;
+- Sync hook;
+- Kubernetes events;
+- image availability.
 
 ---
 
-## 54. Known MVP Limitations
+## 75. Migration Failure
 
-The first release may not include:
+Inspect Argo CD operation state.
 
-- Full frontend tracing
-- Complete browser session replay
-- Advanced anomaly detection
-- Formal SLO tooling
-- Automatic remediation
-- Long-term metrics storage
-- Multi-region telemetry
-- Enterprise SIEM integration
-- PagerDuty routing
-- Complete synthetic transactions
-- Production-scale log retention
+Then review migration Job or hook information.
 
-These limitations must not prevent basic operational visibility.
+Check:
+
+- database connectivity;
+- migration version;
+- credentials;
+- application image;
+- Alembic logs.
+
+Do not manually force application rollout past a failed schema migration
+without understanding compatibility.
 
 ---
 
-## 55. Observability Acceptance Criteria
+## 76. Infrastructure Drift
 
-The observability design is complete when:
+Run:
 
-- Observability objectives are documented.
-- Metrics, logs, and traces are defined.
-- Health and readiness behavior is defined.
-- Application metrics are defined.
-- Worker and queue metrics are defined.
-- Database and Redis monitoring are defined.
-- Structured logging requirements are defined.
-- Sensitive telemetry restrictions are defined.
-- Request and trace correlation are defined.
-- Dashboards are identified.
-- Service-level indicators are defined.
-- Initial service-level objectives are defined.
-- Alert severity and routing are defined.
-- Initial alert rules are defined.
-- Runbook requirements are defined.
-- Kubernetes and AWS observability are defined.
-- Retention and cardinality controls are defined.
-- Local development observability is defined.
-- Known MVP limitations are documented.
+```bash
+terraform plan
+```
+
+If unexpected changes exist:
+
+1. identify resource;
+2. compare Terraform and AWS;
+3. determine whether change was manual;
+4. determine whether resource should be imported, corrected, or reverted;
+5. restore zero drift before unrelated infrastructure work.
+
+---
+
+# Synthetic Monitoring
+
+## 77. Current Synthetic Checks
+
+Current simple synthetic checks include:
+
+```bash
+curl -I \
+  https://launchpad.christineadelusi.com/
+```
+
+and:
+
+```bash
+curl -sS \
+  https://launchpad.christineadelusi.com/health/ready
+```
+
+These are lightweight but valuable.
+
+---
+
+## 78. Future Authenticated Synthetic Flow
+
+A future synthetic workflow may:
+
+1. authenticate a dedicated test user;
+2. query environments;
+3. create a test environment;
+4. submit a deployment request;
+5. verify request completion;
+6. clean up the test resource.
+
+This would provide stronger user-journey availability validation.
+
+Care must be taken to avoid uncontrolled persistent test data.
+
+---
+
+# CI/CD Observability
+
+## 79. Jenkins Telemetry
+
+Future Jenkins telemetry may include:
+
+- build duration;
+- build success;
+- failed stage;
+- test count;
+- security findings;
+- image digest;
+- GitOps commit;
+- deployment health.
+
+Build metadata should allow correlation to the running artifact.
+
+---
+
+## 80. Deployment Traceability
+
+The target release correlation model is:
+
+```text
+Source Commit
+    |
+    v
+Jenkins Build
+    |
+    v
+ECR Image Digest
+    |
+    v
+GitOps Commit
+    |
+    v
+Argo CD Revision
+    |
+    v
+Running Pod
+```
+
+This provides end-to-end release provenance.
+
+---
+
+# Security Observability
+
+## 81. Authentication Signals
+
+Useful security telemetry includes:
+
+- failed authentication count;
+- disabled-user denials;
+- authorization failures;
+- administrative actions.
+
+Specific user investigations belong primarily in protected audit records.
+
+---
+
+## 82. Secret Safety
+
+Observability systems must not capture values mounted from:
+
+```text
+AWS Secrets Manager
+```
+
+including:
+
+```text
+database_url
+secret_key
+```
+
+Log collection agents and trace instrumentation should explicitly exclude
+sensitive environment or file contents.
+
+---
+
+# Teardown and Rebuild
+
+## 83. Observability Before Teardown
+
+Before destroying the development environment, capture evidence such as:
+
+- Terraform zero-drift output;
+- Argo CD `Synced / Healthy`;
+- healthy Kubernetes pods;
+- HTTPS `200`;
+- backend readiness;
+- successful worker processing;
+- relevant screenshots.
+
+This allows the portfolio to retain operational evidence after AWS resources
+are removed.
+
+---
+
+## 84. Observability After Rebuild
+
+After reconstruction, validate:
+
+```text
+Terraform infrastructure
+        |
+        v
+EKS nodes
+        |
+        v
+Argo CD
+        |
+        v
+GitOps Applications
+        |
+        v
+Migration hook
+        |
+        v
+Application pods
+        |
+        v
+Public HTTPS
+        |
+        v
+Database readiness
+        |
+        v
+End-to-end worker workflow
+```
+
+A successful rebuild should reproduce the same health signals.
+
+---
+
+# Implementation Roadmap
+
+## 85. Phase 1 — Implemented
+
+Current capabilities:
+
+```text
+Backend liveness
+Backend readiness
+Database readiness
+Kubernetes probes
+Application logs
+Worker logs
+Kubernetes status
+Argo CD health
+Argo CD sync status
+Migration-hook status
+ALB/HTTPS checks
+Terraform drift detection
+End-to-end workflow validation
+```
+
+---
+
+## 86. Phase 2 — Metrics
+
+Introduce:
+
+```text
+Prometheus
+application metrics
+worker metrics
+kube-state-metrics
+node metrics
+selected AWS metrics
+```
+
+Validate metric cardinality before broad dashboard creation.
+
+---
+
+## 87. Phase 3 — Dashboards
+
+Introduce Grafana dashboards for:
+
+```text
+Application
+Worker
+Kubernetes
+RDS
+ALB
+Argo CD
+CI/CD
+```
+
+---
+
+## 88. Phase 4 — Centralized Logs
+
+Select and deploy:
+
+```text
+Loki
+or
+CloudWatch Logs
+or
+another appropriate backend
+```
+
+Add structured log collection and retention.
+
+---
+
+## 89. Phase 5 — Distributed Tracing
+
+Implement OpenTelemetry instrumentation across:
+
+```text
+Frontend
+FastAPI
+PostgreSQL operations
+Worker
+external integrations
+```
+
+Select a trace backend such as Tempo or another supported platform.
+
+---
+
+## 90. Phase 6 — Alerting and SLOs
+
+After telemetry is stable:
+
+- define SLIs;
+- establish measured SLOs;
+- add alerts;
+- add Slack routing;
+- create runbooks;
+- validate alert behavior.
+
+---
+
+# Implemented Versus Future Observability
+
+## 91. Implemented and Validated
+
+```text
+FastAPI /health/live
+FastAPI /health/ready
+PostgreSQL readiness validation
+Kubernetes liveness probes
+Kubernetes readiness probes
+Kubernetes pod visibility
+Kubernetes Deployment visibility
+Backend application logs
+Worker logs
+Worker success messages
+Argo CD sync status
+Argo CD health
+Argo CD migration-hook visibility
+ALB HTTP redirect validation
+HTTPS endpoint validation
+Frontend availability validation
+Terraform zero-drift validation
+End-to-end deployment-request validation
+```
+
+---
+
+## 92. Planned / Future
+
+```text
+Prometheus
+Grafana
+Loki
+OpenTelemetry
+Tempo
+Alertmanager
+Slack alert routing
+formal SLO measurement
+automated synthetic user workflow
+centralized log retention
+distributed tracing
+DORA dashboards
+long-term metrics storage
+```
+
+This distinction prevents architecture documentation from overstating the
+current implementation.
+
+---
+
+## 93. Architecture Evolution
+
+The original observability design assumed:
+
+```text
+Redis task queue
+Prometheus
+Grafana
+Loki
+Tempo
+OpenTelemetry
+Alertmanager
+```
+
+as part of the platform architecture.
+
+During implementation:
+
+- the worker moved to database-backed polling;
+- Redis stopped being the primary deployment queue dependency;
+- core application health and runtime logging were implemented first;
+- Argo CD became an important deployment-health signal;
+- Terraform drift became an important infrastructure-health signal;
+- HTTPS endpoint validation became an edge-health signal;
+- full centralized telemetry was intentionally deferred.
+
+This progression reflects an incremental observability strategy:
+
+```text
+Health
+   |
+   v
+Logs
+   |
+   v
+Deployment visibility
+   |
+   v
+Metrics
+   |
+   v
+Dashboards
+   |
+   v
+Traces
+   |
+   v
+SLOs and Alerting
+```
+
+---
+
+## 94. Portfolio Demonstration
+
+For an interview demonstration, useful operational checks include:
+
+```bash
+terraform plan
+```
+
+```bash
+kubectl get applications \
+  -n argocd
+```
+
+```bash
+kubectl get pods \
+  -n platform-launchpad
+```
+
+```bash
+curl -I \
+  https://launchpad.christineadelusi.com/
+```
+
+```bash
+curl -sS \
+  https://launchpad.christineadelusi.com/health/ready
+```
+
+```bash
+kubectl logs \
+  -n platform-launchpad \
+  deployment/worker \
+  --tail=50
+```
+
+Together, these demonstrate visibility across:
+
+```text
+Infrastructure
+GitOps
+Kubernetes
+Application
+Database
+Worker
+Public ingress
+```
+
+---
+
+## 95. Observability Principles Demonstrated
+
+Platform Launchpad demonstrates:
+
+- application-aware health;
+- distinction between liveness and readiness;
+- dependency-aware readiness;
+- structured operational logging;
+- asynchronous worker visibility;
+- GitOps health visibility;
+- schema-migration visibility;
+- infrastructure drift detection;
+- public endpoint validation;
+- security-conscious telemetry;
+- cost-conscious telemetry design;
+- incremental observability adoption;
+- explicit implemented-versus-planned boundaries.
+
+---
+
+## 96. Summary
+
+Platform Launchpad currently provides a practical operational visibility layer
+through:
+
+```text
+Application health endpoints
+        |
+        v
+Kubernetes health and probes
+        |
+        v
+Application and worker logs
+        |
+        v
+Argo CD sync and health
+        |
+        v
+Terraform drift detection
+        |
+        v
+Public HTTPS validation
+        |
+        v
+End-to-end user workflow testing
+```
+
+This represents the observability capabilities that have actually been
+implemented and validated.
+
+The target architecture expands that foundation with:
+
+```text
+Prometheus
+Grafana
+Centralized Logging
+OpenTelemetry
+Distributed Tracing
+Alerting
+SLOs
+```
+
+Those components remain explicit future work rather than being represented as
+already deployed.
+
+The observability strategy therefore prioritizes credible, validated
+operational signals today while preserving a clear path toward a complete
+production-style monitoring and telemetry platform.
