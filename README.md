@@ -562,6 +562,66 @@ docs/api/api-specification.md
 
 ---
 
+---
+
+## Validation Evidence
+
+The development environment was validated end to end before teardown.
+
+### Platform Dashboard
+
+![Platform Launchpad dashboard](docs/screenshots/application/01-dashboard.png)
+
+The dashboard demonstrates an authenticated user session, environment
+visibility, active deployment tracking, role-aware access, and live backend
+connectivity.
+
+### GitOps Reconciliation
+
+![Argo CD applications](docs/screenshots/argocd/01-applications-overview.png)
+
+Both GitOps Applications were validated as:
+
+```text
+aws-load-balancer-controller-development   Synced   Healthy
+platform-launchpad-development             Synced   Healthy
+```
+
+### Kubernetes Runtime
+
+![Platform Launchpad workloads](docs/screenshots/kubernetes/01-application-workloads.png)
+
+The frontend, backend, and worker workloads were validated as running on
+Amazon EKS with zero container restarts at evidence-capture time.
+
+### Terraform Zero Drift
+
+![Terraform zero-drift validation](docs/screenshots/infrastructure/01-terraform-zero-drift.png)
+
+The final infrastructure validation reported:
+
+```text
+No changes. Your infrastructure matches the configuration.
+```
+
+Additional evidence is available under:
+
+```text
+docs/screenshots/
+├── application/
+├── argocd/
+├── infrastructure/
+└── kubernetes/
+```
+
+The complete implementation narrative and validation results are documented in:
+
+```text
+docs/case-study.md
+```
+
+---
+
 ## Cost Management
 
 The AWS development environment is not intended to remain online continuously.

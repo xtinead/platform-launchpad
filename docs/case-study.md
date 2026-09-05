@@ -1195,7 +1195,57 @@ networking, recovery, operations, and cost control.
 
 ---
 
-## 37. Summary
+## 37. Validation Evidence
+
+The following screenshots were captured from the validated AWS development
+environment before teardown.
+
+### Application
+
+- [Dashboard](screenshots/application/01-dashboard.png)
+- [Environment management](screenshots/application/02-environments.png)
+- [Successful deployment request](screenshots/application/03-successful-deployment-request.png)
+
+### Argo CD and GitOps
+
+- [Applications overview](screenshots/argocd/01-applications-overview.png)
+- [Platform Launchpad resource graph](screenshots/argocd/02-platform-launchpad-resource-graph.png)
+- [AWS Load Balancer Controller reconciliation](screenshots/argocd/03-load-balancer-controller-synced.png)
+- [Database migration Sync hook](screenshots/argocd/04-database-migration-hook.png)
+
+### Kubernetes
+
+- [Application workloads](screenshots/kubernetes/01-application-workloads.png)
+- [Services and Ingress routing](screenshots/kubernetes/02-application-services-ingress.png)
+- [Platform components](screenshots/kubernetes/03-platform-components.png)
+- [Argo CD control plane](screenshots/kubernetes/04-argocd-control-plane.png)
+- [EKS nodes](screenshots/kubernetes/05-eks-nodes.png)
+
+### Infrastructure
+
+- [Terraform zero drift](screenshots/infrastructure/01-terraform-zero-drift.png)
+- [HTTPS validation](screenshots/infrastructure/02-https-validation.png)
+- [Backend readiness](screenshots/infrastructure/03-backend-readiness.png)
+- [Worker processing success](screenshots/infrastructure/04-worker-success.png)
+
+Together, this evidence demonstrates the platform across four layers:
+
+```text
+Application
+    |
+    v
+GitOps / Argo CD
+    |
+    v
+Kubernetes / EKS
+    |
+    v
+Terraform / AWS
+```
+
+---
+
+## 38. Summary
 
 Platform Launchpad evolved from a local application prototype into a
 production-style AWS and Kubernetes platform.
