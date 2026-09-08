@@ -1048,6 +1048,68 @@ then:
 
 Argo CD then reconciles the runtime.
 
+### Teardown Recovery and Lifecycle Hardening
+
+The first complete development teardown exposed lifecycle dependencies that
+were not visible during normal deployment.
+
+The initial Terraform destroy encountered four distinct blockers:
+
+- non-empty ECR repositories prevented repository deletion;
+- a Jenkins IAM access key prevented deletion of the Terraform-owned IAM user;
+- a detached EKS-generated network interface prevented private subnet deletion;
+- an orphaned EKS cluster security group prevented final VPC deletion.
+
+The recovery process preserved Terraform as the infrastructure authority rather
+than abandoning state or broadly deleting AWS resources.
+
+The sequence was:
+
+```text
+Terraform destroy
+    |
+    v
+Dependency failure detected
+    |
+    v
+Inspect Terraform and AWS ownership
+    |
+    v
+Perform narrowly scoped residual cleanup
+    |
+    v
+Regenerate destroy plan
+    |
+    v
+Continue Terraform destruction
+    |
+    v
+Terraform development state empty
+```
+
+The teardown findings were then converted into platform improvements:
+
+- reusable ECR modules expose an opt-in `force_delete` lifecycle control;
+- the development environment enables ECR deletion for disposable image
+  repositories while reusable module defaults remain conservative;
+- the CI delivery IAM module exposes an opt-in `jenkins_force_destroy` control
+  for subordinate Jenkins bootstrap credentials;
+- `prepare-destroy.sh` coordinates GitOps and controller-aware teardown before
+  EKS destruction;
+- `cleanup-eks-residuals.sh` provides guarded recovery for known EKS networking
+  residue;
+- `verify-destroy.sh` performs ownership-aware post-destroy acceptance checks;
+- partial destroy recovery requires regeneration and review of the Terraform
+  destroy plan after external state changes.
+
+Post-destroy verification confirmed that the Platform Launchpad development
+Terraform state was empty and that Platform Launchpad runtime resources were
+absent without treating unrelated infrastructure in the AWS account as
+teardown residue.
+
+This turned teardown from an assumed Terraform operation into a tested,
+documented, and repeatable platform lifecycle capability.
+
 ---
 
 ## 33. Cost Management

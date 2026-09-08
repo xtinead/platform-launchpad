@@ -29,7 +29,7 @@ resource "aws_ecr_repository" "this" {
   name = (
     "${local.name_prefix}-${each.value.suffix}"
   )
-
+  force_delete         = var.force_delete
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {

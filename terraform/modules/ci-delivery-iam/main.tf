@@ -10,7 +10,8 @@ locals {
 
 
 resource "aws_iam_user" "jenkins" {
-  name = "${local.name_prefix}-jenkins"
+  name          = "${local.name_prefix}-jenkins"
+  force_destroy = var.jenkins_force_destroy
 
   tags = merge(
     local.common_tags,

@@ -60,16 +60,17 @@ module "ecr" {
 
   image_tag_mutability = "IMMUTABLE"
   scan_on_push         = true
+  force_delete         = true
   max_image_count      = 10
 }
 
 module "ci_delivery_iam" {
   source = "../../modules/ci-delivery-iam"
 
-  project_name = var.project_name
-  environment  = var.environment
-
-  ecr_repository_arn = module.ecr.repository_arn
+  project_name          = var.project_name
+  environment           = var.environment
+  jenkins_force_destroy = true
+  ecr_repository_arn    = module.ecr.repository_arn
 }
 
 module "secrets" {
@@ -237,15 +238,15 @@ module "load_balancer_controller_iam" {
 }
 
 module "controller_ecr" {
-  source = "../../modules/controller-ecr"
-
+  source       = "../../modules/controller-ecr"
+  force_delete = true
   project_name = var.project_name
   environment  = var.environment
 }
 
 module "argocd_ecr" {
-  source = "../../modules/argocd-ecr"
-
+  source       = "../../modules/argocd-ecr"
+  force_delete = true
   project_name = var.project_name
   environment  = var.environment
 }

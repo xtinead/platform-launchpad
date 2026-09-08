@@ -8,3 +8,9 @@ node_modules/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Terraform local working directories and generated state/plan files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan

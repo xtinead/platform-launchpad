@@ -7,3 +7,9 @@ variable "environment" {
   description = "Deployment environment name."
   type        = string
 }
+
+variable "force_delete" {
+  description = "Allow Argo CD bootstrap ECR repositories to be deleted even when images remain."
+  type        = bool
+  default     = false
+}

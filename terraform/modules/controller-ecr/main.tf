@@ -13,7 +13,7 @@ resource "aws_ecr_repository" "load_balancer_controller" {
   name = (
     "${local.name_prefix}-aws-load-balancer-controller"
   )
-
+  force_delete         = var.force_delete
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {

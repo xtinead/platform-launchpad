@@ -1,0 +1,10 @@
+# Normalize text files in Git while preserving appropriate working-tree endings.
+* text=auto
+
+# Linux-executed files must remain LF.
+*.sh text eol=lf
+
+# Repository-controlled configuration and documentation use LF.
+*.md text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

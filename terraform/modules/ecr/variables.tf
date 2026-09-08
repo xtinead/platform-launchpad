@@ -47,3 +47,9 @@ variable "max_image_count" {
   type        = number
   default     = 10
 }
+
+variable "force_delete" {
+  description = "Allow the ECR repository to be deleted even when images remain."
+  type        = bool
+  default     = false
+}

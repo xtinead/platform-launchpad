@@ -763,9 +763,240 @@ finished deleting.
 
 ---
 
-# Part V — Terraform Destroy
+# Part V — Automated Teardown Preparation
 
-## 30. Execute the Saved Destroy Plan
+## 30. Preferred Teardown Workflow
+
+The preferred development teardown sequence is:
+
+```text
+Application validation complete
+        |
+        v
+Prepare GitOps teardown
+        |
+        +-- Delete application with Argo CD finalizer
+        +-- Delete controller application
+        +-- Allow controller to remove ALB resources
+        |
+        v
+Verify Kubernetes and AWS cleanup
+        |
+        v
+terraform plan -destroy
+        |
+        v
+terraform apply <destroy-plan>
+        |
+        +-- Development ECR repositories permit force_delete
+        +-- Jenkins bootstrap IAM user permits force_destroy
+        |
+        v
+Handle EKS residuals only if necessary
+        |
+        v
+Regenerate destroy plan after partial failure
+        |
+        v
+Complete Terraform destruction
+        |
+        v
+Post-destroy verification
+```
+
+The repository-controlled teardown helpers are intended to make this sequence
+repeatable without making broad account-level deletion assumptions.
+
+---
+
+## 31. Prepare GitOps Resources for Destroy
+
+From the repository root, run:
+
+```bash
+cd /c/apps/platform-launchpad
+./bootstrap/teardown/prepare-destroy.sh
+```
+
+The preparation helper performs the Kubernetes and GitOps cleanup that should
+occur while the EKS control plane and AWS Load Balancer Controller are still
+available.
+
+Its responsibilities include:
+
+- validating required tooling and AWS identity;
+- updating kubeconfig for the development cluster;
+- stopping active Argo CD reconciliation where necessary;
+- initiating controlled removal of the Platform Launchpad application;
+- initiating controlled removal of the AWS Load Balancer Controller;
+- allowing controller-managed AWS resources to be deleted before EKS;
+- verifying that Platform Launchpad runtime resources no longer remain.
+
+Do not delete desired state from the GitOps repository merely to tear down the
+temporary runtime. Git remains authoritative for reconstruction.
+
+---
+
+## 32. Argo CD Cascading Deletion
+
+Argo CD Applications must be removed with cascading deletion semantics when
+their managed resources need to disappear with the runtime.
+
+Before deleting an Application, ensure the resources finalizer is present:
+
+```text
+resources-finalizer.argocd.argoproj.io
+```
+
+The finalizer allows Argo CD to remove managed Kubernetes resources before the
+Application object itself disappears.
+
+This is particularly important for the Platform Launchpad application and the
+AWS Load Balancer Controller application.
+
+Deleting an Application object without the required cascading behavior can
+leave managed resources behind even though the Argo CD Application itself no
+longer exists.
+
+---
+
+## 33. Verify Controller-Managed AWS Cleanup
+
+The application Ingress and AWS Load Balancer Controller must be removed while
+the controller still has an opportunity to reconcile AWS resources.
+
+Do not destroy EKS immediately after deleting the Kubernetes Ingress.
+
+Verify that the Platform Launchpad ALB has disappeared:
+
+```bash
+aws elbv2 describe-load-balancers \
+  --region us-east-1 \
+  --query 'LoadBalancers[].{
+    Name:LoadBalancerName,
+    DNS:DNSName,
+    State:State.Code
+  }' \
+  --output table
+```
+
+The AWS account may contain unrelated load balancers. Validate Platform
+Launchpad ownership rather than requiring the account-wide result to be empty.
+
+---
+
+## 34. EKS Residual Cleanup
+
+Normal teardown should allow Terraform and Kubernetes controllers to remove
+their own resources.
+
+If Terraform later reports subnet or VPC dependency violations caused by EKS
+networking residue, use:
+
+```bash
+cd /c/apps/platform-launchpad
+./bootstrap/teardown/cleanup-eks-residuals.sh
+```
+
+This helper is a recovery mechanism, not a normal pre-destroy deletion step.
+
+It limits cleanup to residual resources that can be safely identified as
+Platform Launchpad EKS artifacts, including:
+
+- detached `aws-K8S-*` network interfaces that are available, unattached, and
+  not requester-managed;
+- an orphaned EKS-generated cluster security group only when no network
+  interfaces still reference it.
+
+Do not broaden the script into generic VPC cleanup. The purpose is to recover
+from known EKS residual dependencies without deleting unrelated infrastructure.
+
+---
+
+## 35. Regenerate Plans After Partial Destroy
+
+A saved Terraform destroy plan describes infrastructure at the time the plan
+was created.
+
+If a destroy partially succeeds and a controlled recovery action changes AWS
+state, discard the obsolete plan and generate a new one:
+
+```bash
+cd /c/apps/platform-launchpad/terraform/environments/development
+
+rm -f platform-launchpad-development-destroy.tfplan
+
+terraform plan \
+  -destroy \
+  -out=platform-launchpad-development-destroy.tfplan
+```
+
+Review the new plan before applying it.
+
+A partial destroy may significantly reduce the number of remaining resources.
+That is expected. Terraform should be allowed to reconcile its state after each
+controlled recovery action.
+
+---
+
+## 36. Destructive Lifecycle Configuration
+
+Some AWS resources contain subordinate objects that can otherwise prevent
+Terraform from deleting the parent resource.
+
+Platform Launchpad explicitly configures development teardown behavior for
+these cases.
+
+### ECR
+
+The reusable ECR modules expose:
+
+```hcl
+force_delete
+```
+
+The development environment enables:
+
+```hcl
+force_delete = true
+```
+
+for the application image repository, AWS Load Balancer Controller mirror,
+Argo CD image mirror, Argo CD Dex image mirror, and Argo CD Redis image mirror.
+
+This permits the intentionally disposable development environment to remove
+ECR repositories that still contain images.
+
+Reusable module defaults remain conservative so staging or production can use
+different artifact-retention policies.
+
+### Jenkins Bootstrap IAM User
+
+The CI delivery IAM module exposes:
+
+```hcl
+jenkins_force_destroy
+```
+
+The development environment enables:
+
+```hcl
+jenkins_force_destroy = true
+```
+
+This allows Terraform to remove subordinate credentials associated with the
+Terraform-owned Jenkins bootstrap IAM user during intentional development
+teardown.
+
+These destructive settings are environment-specific and must not
+automatically be copied to staging or production environments with different
+retention requirements.
+
+---
+
+# Part VI — Terraform Destroy
+
+## 37. Execute the Saved Destroy Plan
 
 Once the destroy plan has been reviewed:
 
@@ -778,7 +1009,7 @@ Using the saved plan ensures the executed actions match the reviewed plan.
 
 ---
 
-## 31. Monitor Destroy
+## 38. Monitor Destroy
 
 Terraform may take time to remove:
 
@@ -794,25 +1025,74 @@ Do not interrupt the process unless necessary.
 
 ---
 
-## 32. Destroy Failure Handling
+## 39. Destroy Failure Handling
+
+A partial Terraform destroy is recoverable and must not be treated as a reason
+to abandon Terraform state.
 
 If Terraform fails during destroy:
 
-1. read the exact resource failure;
-2. do not randomly delete dependencies;
-3. inspect AWS state;
-4. inspect Terraform state;
-5. resolve the dependency;
-6. rerun `terraform plan -destroy`;
-7. continue through Terraform.
+1. read the exact AWS or Terraform error;
+2. inspect the failed resource and its dependencies;
+3. inspect the remaining Terraform state;
+4. determine whether the dependency is Terraform-owned, controller-managed,
+   or a residual AWS resource;
+5. use the repository-controlled cleanup workflow when applicable;
+6. verify that the dependency has actually disappeared;
+7. generate a new `terraform plan -destroy`;
+8. review the reduced destroy scope;
+9. continue destruction through Terraform.
 
-Manual deletion should be a controlled recovery action, not the default.
+For EKS networking residuals:
+
+```bash
+cd /c/apps/platform-launchpad
+./bootstrap/teardown/cleanup-eks-residuals.sh
+```
+
+Do not repeatedly apply an obsolete saved destroy plan after infrastructure
+has changed outside that plan.
+
+Manual AWS deletion remains a controlled recovery action rather than the
+normal teardown path.
 
 ---
 
-# Part VI — Post-Destroy Validation
+# Part VII — Post-Destroy Validation
 
-## 33. Terraform State Check
+Post-destroy validation is scoped by **Platform Launchpad resource ownership**,
+not by whether the AWS account is globally empty.
+
+A successful Platform Launchpad development teardown means:
+
+```text
+Terraform development state is empty
+Platform Launchpad EKS cluster is absent
+Platform Launchpad RDS instance is absent
+Platform Launchpad Redis replication group is absent
+Platform Launchpad NAT Gateway is absent
+Platform Launchpad VPC endpoints are absent
+Platform Launchpad ALB is absent
+Platform Launchpad VPC is absent
+Platform Launchpad ECR repositories are absent
+Platform Launchpad Jenkins bootstrap IAM user is absent
+```
+
+Unrelated infrastructure must not be classified as teardown residue solely
+because it exists in the same AWS account.
+
+Use the repository-controlled verification helper:
+
+```bash
+cd /c/apps/platform-launchpad
+./bootstrap/teardown/verify-destroy.sh
+```
+
+The helper complements targeted AWS CLI inspection and provides a repeatable
+post-destroy acceptance check.
+
+
+## 40. Terraform State Check
 
 After successful destruction:
 
@@ -820,16 +1100,18 @@ After successful destruction:
 terraform state list
 ```
 
-Review what remains.
+For the Platform Launchpad development environment, the expected result is no
+output.
 
-Environment resources expected to be destroyed should no longer appear.
+The development Terraform state should be empty after complete destruction.
 
-Some intentionally persistent resources may remain if they are designed to
-survive environment destruction.
+Resources intentionally designed to survive runtime teardown, such as the
+remote Terraform backend, are outside this environment state and are validated
+separately.
 
 ---
 
-## 34. Terraform Plan Check
+## 41. Terraform Plan Check
 
 Run:
 
@@ -846,7 +1128,7 @@ This validates that the configuration still describes the complete platform.
 
 ---
 
-## 35. Check EKS
+## 42. Check EKS
 
 Run:
 
@@ -865,7 +1147,7 @@ is gone.
 
 ---
 
-## 36. Check EC2 Worker Instances
+## 43. Check EC2 Worker Instances
 
 Run:
 
@@ -886,7 +1168,7 @@ Confirm Platform Launchpad worker nodes are not left running.
 
 ---
 
-## 37. Check Load Balancers
+## 44. Check Load Balancers
 
 Run:
 
@@ -905,7 +1187,7 @@ Confirm the Platform Launchpad ALB is gone.
 
 ---
 
-## 38. Check NAT Gateways
+## 45. Check NAT Gateways
 
 Run:
 
@@ -927,7 +1209,7 @@ NAT is an important cost check.
 
 ---
 
-## 39. Check Elastic IPs
+## 46. Check Elastic IPs
 
 Run:
 
@@ -946,7 +1228,7 @@ Confirm there is no unused Platform Launchpad Elastic IP left unintentionally.
 
 ---
 
-## 40. Check RDS
+## 47. Check RDS
 
 Run:
 
@@ -964,7 +1246,7 @@ Confirm the development database is removed unless intentionally retained.
 
 ---
 
-## 41. Check Redis
+## 48. Check Redis
 
 Run:
 
@@ -983,7 +1265,7 @@ retained.
 
 ---
 
-## 42. Check VPC Endpoints
+## 49. Check VPC Endpoints
 
 Run:
 
@@ -1005,7 +1287,7 @@ Interface endpoints can generate ongoing hourly cost.
 
 ---
 
-## 43. Check ECR
+## 50. Check ECR
 
 Run:
 
@@ -1022,7 +1304,7 @@ Do not assume ECR repositories should always survive.
 
 ---
 
-## 44. Check Secrets Manager
+## 51. Check Secrets Manager
 
 Run:
 
@@ -1043,9 +1325,9 @@ Remember that Secrets Manager deletion may use a recovery window.
 
 ---
 
-# Part VII — DNS After Destroy
+# Part VIII — DNS After Destroy
 
-## 45. Application DNS Record
+## 52. Application DNS Record
 
 After the ALB is destroyed, the record:
 
@@ -1067,7 +1349,7 @@ The hosted zone itself must remain.
 
 ---
 
-## 46. ACM Certificate After Destroy
+## 53. ACM Certificate After Destroy
 
 The ACM certificate may remain intentionally.
 
@@ -1084,9 +1366,9 @@ Ownership should remain documented.
 
 ---
 
-# Part VIII — Rebuild
+# Part IX — Rebuild
 
-## 47. Rebuild Preconditions
+## 54. Rebuild Preconditions
 
 Before rebuilding, confirm:
 
@@ -1103,7 +1385,7 @@ Before rebuilding, confirm:
 
 ---
 
-## 48. Verify AWS Identity Before Rebuild
+## 55. Verify AWS Identity Before Rebuild
 
 Run:
 
@@ -1117,7 +1399,7 @@ Confirm the intended runtime AWS account.
 
 ---
 
-## 49. Initialize Terraform
+## 56. Initialize Terraform
 
 From:
 
@@ -1139,7 +1421,7 @@ terraform validate
 
 ---
 
-## 50. Generate Rebuild Plan
+## 57. Generate Rebuild Plan
 
 Run:
 
@@ -1159,7 +1441,7 @@ Confirm resources match the intended development architecture.
 
 ---
 
-## 51. Apply AWS Foundation
+## 58. Apply AWS Foundation
 
 Run:
 
@@ -1184,7 +1466,7 @@ Terraform recreates the AWS foundation, including appropriate:
 
 ---
 
-## 52. Validate Terraform After Rebuild
+## 59. Validate Terraform After Rebuild
 
 Run:
 
@@ -1200,7 +1482,7 @@ No changes. Your infrastructure matches the configuration.
 
 ---
 
-## 53. Update Kubernetes Access
+## 60. Update Kubernetes Access
 
 The Argo CD bootstrap performs kubeconfig setup, but manual verification may
 also be useful.
@@ -1221,7 +1503,7 @@ kubectl get nodes
 
 ---
 
-## 54. Bootstrap Argo CD
+## 61. Bootstrap Argo CD
 
 From:
 
@@ -1249,7 +1531,7 @@ The bootstrap will:
 
 ---
 
-## 55. Apply GitOps Applications
+## 62. Apply GitOps Applications
 
 Run:
 
@@ -1266,7 +1548,7 @@ platform-launchpad-development
 
 ---
 
-## 56. Verify Argo CD
+## 63. Verify Argo CD
 
 Run:
 
@@ -1287,7 +1569,7 @@ approved synchronization and wait for completion.
 
 ---
 
-## 57. Verify Migration Hook
+## 64. Verify Migration Hook
 
 Confirm the database migration Job succeeds during the application sync.
 
@@ -1308,7 +1590,7 @@ Succeeded
 
 ---
 
-## 58. Verify Application Pods
+## 65. Verify Application Pods
 
 Run:
 
@@ -1327,7 +1609,7 @@ worker      1/1 Running
 
 ---
 
-## 59. Restore or Create DNS Record
+## 66. Restore or Create DNS Record
 
 A newly rebuilt ALB may receive a different AWS DNS hostname.
 
@@ -1345,7 +1627,7 @@ Do not assume the previous ALB hostname survives rebuild.
 
 ---
 
-## 60. Verify HTTPS
+## 67. Verify HTTPS
 
 Once DNS resolves:
 
@@ -1375,7 +1657,7 @@ HTTP/2 200
 
 ---
 
-## 61. Verify Backend Readiness
+## 68. Verify Backend Readiness
 
 Run:
 
@@ -1397,7 +1679,7 @@ Expected:
 
 ---
 
-## 62. Verify Worker
+## 69. Verify Worker
 
 Run:
 
@@ -1412,7 +1694,7 @@ Confirm normal worker startup.
 
 ---
 
-## 63. Rebuild Acceptance Test
+## 70. Rebuild Acceptance Test
 
 After infrastructure recovery, perform an application-level test.
 
@@ -1432,9 +1714,9 @@ recreating infrastructure.
 
 ---
 
-# Part IX — Recovery Failure Scenarios
+# Part X — Recovery Failure Scenarios
 
-## 64. Argo CD Image Missing
+## 71. Argo CD Image Missing
 
 If an Argo CD bootstrap image is missing from ECR, the bootstrap should mirror
 it again from the pinned upstream version.
@@ -1444,7 +1726,7 @@ newer version.
 
 ---
 
-## 65. GitOps Application OutOfSync
+## 72. GitOps Application OutOfSync
 
 If an Application reports:
 
@@ -1463,7 +1745,7 @@ Do not immediately force changes without determining whether:
 
 ---
 
-## 66. Migration Failure After Rebuild
+## 73. Migration Failure After Rebuild
 
 If the migration hook fails:
 
@@ -1479,7 +1761,7 @@ Do not bypass the migration hook simply to make application pods start.
 
 ---
 
-## 67. Secret Mount Failure
+## 74. Secret Mount Failure
 
 If workloads fail to mount secrets:
 
@@ -1502,7 +1784,7 @@ Then verify:
 
 ---
 
-## 68. ALB Not Created
+## 75. ALB Not Created
 
 If the Ingress exists but no ALB appears, inspect:
 
@@ -1530,9 +1812,9 @@ Healthy
 
 ---
 
-# Part X — Cost Validation
+# Part XI — Cost Validation
 
-## 69. Highest-Priority Post-Destroy Cost Checks
+## 76. Highest-Priority Post-Destroy Cost Checks
 
 After teardown, verify these first:
 
@@ -1548,7 +1830,7 @@ These are among the most important ongoing development cost sources.
 
 ---
 
-## 70. Resources That May Intentionally Remain
+## 77. Resources That May Intentionally Remain
 
 Depending on the teardown strategy, the following may remain:
 
@@ -1565,9 +1847,9 @@ Their retention must be intentional.
 
 ---
 
-# Part XI — Portfolio Evidence
+# Part XII — Portfolio Evidence
 
-## 71. Recommended Evidence Before Destroy
+## 78. Recommended Evidence Before Destroy
 
 Capture at minimum:
 
@@ -1614,7 +1896,7 @@ Processed deployment request ... succeeded
 
 ---
 
-## 72. Evidence Storage
+## 79. Evidence Storage
 
 Portfolio screenshots should be stored in an appropriate documentation
 directory rather than scattered in the repository root.
@@ -1641,9 +1923,9 @@ Do not include screenshots containing:
 
 ---
 
-# Part XII — Release and Teardown Gate
+# Part XIII — Release and Teardown Gate
 
-## 73. Release Gate
+## 80. Release Gate
 
 Do not tear down until all of the following are complete:
 
@@ -1668,7 +1950,7 @@ Do not tear down until all of the following are complete:
 
 ---
 
-## 74. Destroy Approval Gate
+## 81. Destroy Approval Gate
 
 Immediately before destruction, answer:
 
@@ -1687,9 +1969,9 @@ Only then proceed.
 
 ---
 
-# Part XIII — Rebuild Success Criteria
+# Part XIV — Rebuild Success Criteria
 
-## 75. Infrastructure Criteria
+## 82. Infrastructure Criteria
 
 A successful rebuild requires:
 
@@ -1707,7 +1989,7 @@ VPC endpoints available
 
 ---
 
-## 76. Platform Criteria
+## 83. Platform Criteria
 
 A successful rebuild requires:
 
@@ -1721,7 +2003,7 @@ migration hook Succeeded
 
 ---
 
-## 77. Application Criteria
+## 84. Application Criteria
 
 A successful rebuild requires:
 
@@ -1737,7 +2019,7 @@ worker processes request
 
 ---
 
-## 78. Final Principle
+## 85. Final Principle
 
 The success of Platform Launchpad is not defined by keeping the development
 environment running forever.
@@ -1764,7 +2046,7 @@ rather than undocumented manual AWS configuration.
 
 ---
 
-## 79. Summary
+## 86. Summary
 
 The Platform Launchpad teardown/rebuild lifecycle is:
 

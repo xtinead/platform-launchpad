@@ -23,3 +23,9 @@ variable "ecr_repository_arn" {
   description = "ARN of the ECR repository CI may publish to."
   type        = string
 }
+
+variable "jenkins_force_destroy" {
+  description = "Allow deletion of the Jenkins IAM user when access keys or other credentials remain."
+  type        = bool
+  default     = false
+}

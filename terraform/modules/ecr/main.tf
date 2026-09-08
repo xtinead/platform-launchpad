@@ -10,8 +10,8 @@ locals {
 
 
 resource "aws_ecr_repository" "application" {
-  name = "${local.name_prefix}-application"
-
+  name                 = "${local.name_prefix}-application"
+  force_delete         = var.force_delete
   image_tag_mutability = var.image_tag_mutability
 
   image_scanning_configuration {
