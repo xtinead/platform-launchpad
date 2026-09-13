@@ -2,6 +2,8 @@ locals {
   name_prefix = "${var.project_name}-${var.environment}"
 }
 
+data "aws_caller_identity" "current" {}
+
 
 module "networking" {
   source = "../../modules/networking"
@@ -160,7 +162,7 @@ module "eks" {
   node_role_arn    = module.iam.eks_node_role_arn
 
   admin_principal_arn = (
-    "arn:aws:iam::201854077833:role/Engineer"
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/Engineer"
   )
 
   public_access_cidrs = var.eks_public_access_cidrs
