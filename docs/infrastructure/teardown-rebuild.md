@@ -42,7 +42,7 @@ development
 Primary AWS runtime account:
 
 ```text
-201854077833
+123456789012
 ```
 
 Primary region:
@@ -273,7 +273,7 @@ aws sts get-caller-identity \
 Expected runtime account:
 
 ```text
-201854077833
+123456789012
 ```
 
 If the account does not match, stop.
