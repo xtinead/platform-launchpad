@@ -36,7 +36,7 @@ Example:
 ```yaml
 images:
   - name: platform-launchpad-backend
-    newName: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-backend
+    newName: 123456789012.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-backend
     digest: sha256:1234567890abcdef
 ```
 

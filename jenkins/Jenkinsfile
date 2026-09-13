@@ -9,16 +9,10 @@ pipeline {
 
     environment {
         AWS_REGION = "us-east-1"
-        AWS_ACCOUNT_ID = "201854077833"
-
+        CI_DELIVERY_ROLE_NAME = "platform-launchpad-development-ci-delivery"
         ECR_REPOSITORY = "platform-launchpad-development-application"
-        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
         BACKEND_IMAGE = "platform-launchpad-backend"
         FRONTEND_IMAGE = "platform-launchpad-frontend"
-
-        CI_DELIVERY_ROLE_ARN = "arn:aws:iam::201854077833:role/platform-launchpad-development-ci-delivery"
-
         GITOPS_REPOSITORY_URL = "https://github.com/xtinead/platform-launchpad-gitops.git"
         GITOPS_BRANCH = "main"
         GITOPS_OVERLAY = "overlays/development/kustomization.yaml"
@@ -241,6 +235,37 @@ pipeline {
                     )
                 ]) {
                     script {
+                        def accountId = sh(
+    script: '''
+        set -eu
+
+        AWS_ACCESS_KEY_ID="${BOOTSTRAP_AWS_ACCESS_KEY_ID}" \
+        AWS_SECRET_ACCESS_KEY="${BOOTSTRAP_AWS_SECRET_ACCESS_KEY}" \
+        AWS_SESSION_TOKEN="" \
+        aws sts get-caller-identity \
+            --query Account \
+            --output text
+    ''',
+    returnStdout: true
+).trim()
+
+if (!(accountId ==~ /\d{12}/)) {
+    error(
+        "Unable to resolve a valid AWS account ID."
+    )
+}
+
+env.AWS_ACCOUNT_ID = accountId
+
+env.ECR_REGISTRY = (
+    "${accountId}.dkr.ecr." +
+    "${env.AWS_REGION}.amazonaws.com"
+)
+
+env.CI_DELIVERY_ROLE_ARN = (
+    "arn:aws:iam::${accountId}:role/" +
+    "${env.CI_DELIVERY_ROLE_NAME}"
+)
                         def credentials = sh(
                             script: '''
                                 set -eu

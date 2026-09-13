@@ -195,7 +195,7 @@ image digest.
 Example:
 
 ```text
-201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application@sha256:<digest>
+123456789012.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application@sha256:<digest>
 ```
 
 GitOps manifests reference immutable image digests.
@@ -845,7 +845,7 @@ Example:
 ```yaml
 images:
   - name: platform-launchpad-backend
-    newName: 201854077833.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application
+    newName: 123456789012.dkr.ecr.us-east-1.amazonaws.com/platform-launchpad-development-application
     digest: sha256:<digest>
 ```
 
